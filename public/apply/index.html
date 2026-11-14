@@ -154,7 +154,6 @@
   .opt:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .opt input { margin-top: 3px; }
   .opt.hid { display: none; }
-  .opt.dim { opacity: 0.45; }
   .opt-row { display: flex; flex-wrap: wrap; gap: 0.2rem 1.2rem; }
   .opt-row .opt { margin: 0; padding: 0.45rem 0.6rem; }
   .detail { margin: 0.1rem 0 0.6rem 2.6rem; }
@@ -180,7 +179,6 @@
   .pills label.pill input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .pills label.pill:has(input:checked) { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .pills label.pill:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .pills label.pill.dim { opacity: 0.45; cursor: not-allowed; }
   .fee-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1.1rem; margin: 0 0 1.2rem; max-width: 560px; }
   .fee-card table { border-collapse: collapse; margin: 0.4rem 0; } .fee-card th, .fee-card td { text-align: left; padding: 0.2rem 1.2rem 0.2rem 0; }
   .field-label.strong { color: var(--text); font-weight: 600; font-size: 1rem; }
@@ -535,7 +533,7 @@
       <h2>AI methods you use</h2>
       <p class="lede">Over the next five short screens, tick the methods you use. For each one, tell us your experience level, whether you could present on it, and whether you want to learn more. Leave a method unticked if you don't use it. You can tick "I want to learn more" on anything, including methods you don't use yet.</p>
       <div class="q" data-q="A3.none">
-        <label class="opt"><input type="checkbox" name="A3.none" id="A3.none"><span>I don't use AI yet: I have data and a question. <span class="hint" style="display:inline">This skips the method screens.</span></span></label>
+        <label class="opt"><input type="checkbox" name="A3.none" id="A3.none"><span>I don't use AI yet: I have data and a question.</span></label>
       </div>
       <h3 style="margin:1.2rem 0 0.2rem">Experience level</h3>
       <ul class="levels">
@@ -703,8 +701,8 @@
     <!-- 12 LOOKING FOR -->
     <section class="screen" data-min="0.75" data-key="a6">
       <h2>What you are looking for</h2>
-      <div class="q" data-q="A6.useful" id="useful-q" data-max="3">
-        <span class="qlabel">What would be most useful to you at the meetup? Pick up to three.</span>
+      <div class="q" data-q="A6.useful" id="useful-q">
+        <span class="qlabel">What would be most useful to you at the meetup? Pick all that apply.</span>
         <p class="hint">Do you need someone with specific expertise for a grant project? A supervisor for your thesis idea? Someone to consult?</p>
         <p class="hint">Tell us below and we'll match you with them at the event.</p>
         <!-- 14.11.2026: feedback_direction + feedback_results merged into the new key "feedback" (old columns stay for earlier
@@ -728,7 +726,6 @@
         <div class="detail hid"><label for="A6.useful_detail.exploring">Tell us more (optional)</label><input type="text" id="A6.useful_detail.exploring" name="A6.useful_detail.exploring"></div>
         <label class="opt"><input type="checkbox" name="A6.useful.other" class="other-cb"><span>Something else</span></label>
         <div class="detail hid other-detail"><label for="A6.useful_other">What is it?</label><input type="text" id="A6.useful_other" name="A6.useful_other" class="other-txt"></div>
-        <p class="counter" id="useful-count">0 of 3 selected</p>
         <p class="err-msg">Pick at least one, and say what "something else" is if you ticked it</p>
       </div>
       <p class="lede" style="margin:1.4rem 0 0">We use everything on this screen to build the conference you actually want: the sessions, the people at your table, and the introductions we make before you arrive.</p>
@@ -1274,13 +1271,7 @@
     cb.addEventListener('change', apply); apply();
   });
 
-  var usefulQ = $('#useful-q'), usefulCbs = $$('.opt input[type=checkbox]', usefulQ), MAX = +usefulQ.getAttribute('data-max');
-  function applyUseful() {
-    var n = usefulCbs.filter(function (c) { return c.checked; }).length;
-    $('#useful-count').textContent = n + ' of ' + MAX + ' selected';
-    usefulCbs.forEach(function (c) { var block = !c.checked && n >= MAX; c.disabled = block; c.parentNode.classList.toggle('dim', block); });
-  }
-  usefulCbs.forEach(function (c) { c.addEventListener('change', applyUseful); });
+  var usefulCbs = $$('.opt input[type=checkbox]', $('#useful-q'));
 
 
 
@@ -1424,7 +1415,7 @@
     ta.addEventListener('input', upd); upd();
   });
 
-  function applyAll() { applyStage(); applyInstitution(); applyOrg(); applyCustom(); applyLinks(); applyA5(); applyUseful(); applyDays(); applyHelp(); applyCommunity(); applyOpen(); applyFunding(); drawKw(); }
+  function applyAll() { applyStage(); applyInstitution(); applyOrg(); applyCustom(); applyLinks(); applyA5(); applyDays(); applyHelp(); applyCommunity(); applyOpen(); applyFunding(); drawKw(); }
   applyAll();
 
   /* ---------- validation ---------- */
