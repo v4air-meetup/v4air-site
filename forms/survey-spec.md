@@ -13,7 +13,7 @@ variable ID, so removed questions keep their columns for earlier applications an
 | A6.1 | Ten options to nine (feedback on direction and on results merged); pick up to three (was five; earlier applications may have up to five) | new `A6.useful.feedback` (= feedback_direction + feedback_results), `A6.useful_detail.feedback`; all other options unchanged (`collaborators`, `methods`, `applications`, `contacts`, `talent`, `sharing`, `exploring`, `other`) |
 | A6.2 | "Are you looking for collaborators?" removed; its open follow-up now opens under "Finding collaborators" | old `A6.collab`; `A6.collab_kind` keeps its meaning |
 | A7 | Panel option and hardware question removed; "presented before" and organizing help asked of students only (bsc, phd); softer intro | old `A7.roles.panel`, `A7.hardware.*`, `A7.hardware_detail` |
-| A8 | Applicants outside the partner universities see a fee card mirrored from /pricing/ (`#entrance-fee table`) and a tick "I would need help with the costs" | new `A8.cost_help` |
+| A8 | Applicants outside the partner universities see a fee card mirrored from /pricing/ (`#entrance-fee table`) and a tick "I would like to apply for financing." | new `A8.cost_help` |
 | A2.2 | Keywords also split on comma or semicolon while typing (phone keyboards), and a pending keyword is kept on Next | — |
 | A6.1, A3 (15.11.2026) | No limit on A6.1 picks ("Pick all that apply"; the counter is gone); hint "This skips the method screens" removed from the `A3.none` tick | none |
 
