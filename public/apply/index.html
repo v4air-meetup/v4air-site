@@ -424,7 +424,7 @@
         <label class="qlabel" for="A1.email">Email</label>
         <p class="hint">We use this for the resume link and everything about the meetup</p>
         <input type="email" id="A1.email" name="A1.email" autocomplete="email" inputmode="email">
-        <p class="err-msg">Enter an email address we can reach you at, like name@university.cz</p>
+        <p class="err-msg">Enter an email address we can reach you at, like name@university.cz. It cannot contain letters with accents, such as ł or á.</p>
       </div>
       <div class="q" data-q="A1.stage">
         <span class="qlabel">Where are you in your career?</span>
@@ -1088,7 +1088,7 @@
     for (var i = 0; i < 8; i++) { out += ID_ALPHABET.charAt(Math.floor(Math.random() * ID_ALPHABET.length)); if (i === 3) out += '-'; }
     return prefix + '-' + out;
   }
-  function validEmail() { var v = document.getElementById('A1.email').value.trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : ''; }
+  function validEmail() { var v = document.getElementById('A1.email').value.trim(); return /^[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+$/.test(v) ? v : ''; }
   /* for the nomination form's prefill; consent.js drops both items after 60 days (cookies policy) */
   function rememberApplicant(id) {
     try { localStorage.setItem('v4air-application-id', id); localStorage.setItem('v4air-applicant', JSON.stringify({ name: document.getElementById('A1.name').value.trim(), email: validEmail(), at: Date.now() })); } catch (e) {}
@@ -1438,7 +1438,7 @@
   function vis(q) { return !q.classList.contains('hid'); }
   var validators = {
     'A1.name': function (q) { return $('#A1\\.name').value.trim() ? '' : 'Full name'; },
-    'A1.email': function (q) { var v = $('#A1\\.email').value.trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? '' : 'Email'; },
+    'A1.email': function (q) { var v = $('#A1\\.email').value.trim(); return /^[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+$/.test(v) ? '' : 'Email'; },
     'A1.stage': function (q) { return stage() ? '' : 'Career stage'; },
     'A1.country': function (q) { return COUNTRIES.indexOf(country.value.trim()) > -1 ? '' : 'Country'; },
     'A1.institution': function (q) {
