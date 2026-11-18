@@ -139,9 +139,8 @@ check('no JavaScript errors on the page', !errors.filter(e => !/apply/.test(e)).
 const ue = b64url(Buffer.from('r1@example.org')), ut = tok('r1@example.org');
 await page.goto(`http://127.0.0.1:4320/unsubscribe/?e=${ue}&t=${ut}`);
 await page.waitForSelector('#done.on');
-await page.click('#ask');
-await page.waitForFunction(() => /delete your details/.test(document.getElementById('ask-msg').textContent));
-check('unsubscribe page: the delete button only files a data request', tab('Data requests').some(r => r.email === 'r1@example.org') && nominee(1).name === 'Nominee 1' && nominee(1).decision === 'accepted', tab('Data requests'));
+const shown = await page.locator('#done').innerText();
+check('unsubscribe page: says unsubscribed and nothing about details or deleting; deletes nothing', !(await page.locator('#ask').count()) && !/delete|details stay/i.test(shown) && nominee(1).name === 'Nominee 1' && nominee(1).decision === 'accepted', shown);
 await browser.close();
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
