@@ -21,7 +21,9 @@ function prague(d, pattern) {
 }
 
 const DOC = JSON.parse(readFileSync(new URL('./fixtures/emails-doc.json', import.meta.url)));
-const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Error('no access'); const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => ({ getText: () => t.text }) }), getChildTabs: () => t.children.map(wrap) }); return { getTabs: () => tabs.map(wrap), getName: () => 'emails' }; } });
+/* a tab body the way Apps Script hands it out: one child per paragraph (the Docs API text has one paragraph per line) */
+const body = text => { const ps = String(text).split('\n'); if (ps[ps.length - 1] === '') ps.pop(); return { getNumChildren: () => ps.length, getChild: i => ({ getType: () => 'PARAGRAPH', asText: () => ({ getText: () => ps[i] }) }) }; };
+const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Error('no access'); const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => body(t.text) }), getChildTabs: () => t.children.map(wrap) }); return { getTabs: () => tabs.map(wrap), getName: () => 'emails' }; } });
 
 /* a Date the mailer sees: new Date() without arguments is clock.now */
 const clockDate = clock => class extends Date { constructor(...a) { if (a.length) super(...a); else super(clock.now); } static now() { return clock.now; } };
@@ -326,6 +328,18 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   check('data request after a decline: internal email says no action needed', internal.some(m => /dec@uni.cz/.test(m.subject) && /No action needed/.test(m.body)), internal.map(m => m.subject));
   check('data request: one internal email to data@v4air.eu listing where the address is', internal.filter(m => /kim@/.test(m.subject)).length === 1 && /V4A-KEEP-AAAA/.test(internal[0].body) && /V4N-KEEP-BBBB.1/.test(internal[0].body) && /Nothing has been deleted/.test(internal[0].body) && !internal[0].headers, internal.map(m => m.body));
   check('data request: marked, not sent twice', rows(t.book, 'Data requests').every(r => r.notified_at !== '') && internal.length === 2, rows(t.book, 'Data requests'));
+}
+/* 14. a tab written by Typecase (one paragraph per block, line breaks inside) gives the same email as one typed line by line */
+{
+  const t = setup({});
+  const typed = DOC.find(x => x.title === 'Application confirmation').text.split('\n'); if (typed[typed.length - 1] === '') typed.pop();
+  const a = t.ctx.parseEmail(typed);
+  const blocks = []; let cur = [];
+  for (const l of typed) { if (l.trim()) cur.push(l); else if (cur.length) { blocks.push(cur.join('\u000b')); cur = []; } }
+  if (cur.length) blocks.push(cur.join('\u000b'));
+  const b = t.ctx.parseEmail(blocks);
+  check('Typecase layout and line-by-line layout give the same email', a.subject === b.subject && a.body === b.body && /\n\nThis link is personal/.test(b.body), [a.body.slice(0, 120), b.body.slice(0, 120)]);
+  check('tab names match without punctuation', t.ctx.tabKey('Deadline reminder: 1 week') === t.ctx.tabKey('Deadline reminder 1 week') && t.ctx.tabKey('Application confirmation (late)') === 'applicationconfirmationlate', '');
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);

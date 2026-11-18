@@ -521,7 +521,7 @@ function dueMail(cfg, log) {
       else if (flow.base === 'prev') base = isDate(prevAt) ? prevAt : null;
       if (base && flow.base !== 'prev') base = new Date(Math.max(base, cfg.start));
       var when = flow.kind === 'confirm' ? rec.sent : rec.saved;
-      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS / DAY * D && !!cfg.emails[flow.tab + ' (late)'];
+      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS / DAY * D && !!cfg.emails[tabKey(flow.tab + ' (late)')];
       var problem = textProblem(cfg, it);
       if (!to) it.skip = flow.form === 'N' ? 'no email address (contact: ' + (rec.contact || 'empty') + ')' : 'no email';
       else if (cfg.only && !cfg.only(to)) it.skip = 'test mode: not on MAIL_ONLY';
@@ -621,8 +621,13 @@ function loadEmails(id) {
   var out = {};
   var walk = function (tabs) {
     tabs.forEach(function (t) {
-      var e = parseEmail(t.asDocumentTab().getBody().getText());
-      if (e) out[t.getTitle().trim()] = e;
+      var body = t.asDocumentTab().getBody(), paras = [];
+      for (var i = 0; i < body.getNumChildren(); i++) {
+        var el = body.getChild(i), type = String(el.getType());
+        if (type === 'PARAGRAPH' || type === 'LIST_ITEM') paras.push(el.asText().getText());
+      }
+      var e = parseEmail(paras);
+      if (e) out[tabKey(t.getTitle())] = e;
       walk(t.getChildTabs());
     });
   };
@@ -630,17 +635,32 @@ function loadEmails(id) {
   return out;
 }
 
-/* {subject, body} from one tab's text, or null when the tab has no "Subject:" line (such as "How it works") */
-function parseEmail(text) {
-  var lines = String(text).replace(/\r\n?|\u000b/g, '\n').split('\n'), i = -1;
-  for (var j = 0; j < lines.length && i < 0; j++) if (/^Subject:/.test(lines[j])) i = j;
+/* Tab names are matched without case, spaces or punctuation: Typecase writes "Deadline reminder: 1 week" as "Deadline reminder 1 week". */
+function tabKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+
+/* {subject, body} from one tab's paragraphs, or null when the tab has no "Subject:" paragraph (such as "How it works").
+   Two layouts, told apart by empty paragraphs after the subject:
+   - Typecase's (no empty paragraphs): one empty line between two paragraphs, a line break inside a paragraph stays a line
+     break. Typecase writes "one empty line = a new paragraph", so a text reads the same in Typecase, in the Doc and in the email.
+   - typed line by line (each line its own paragraph, an empty paragraph for each empty line): the lines as they are.
+   Paragraphs above the subject (the "Sent:" rule) are ignored. */
+function parseEmail(paras) {
+  paras = paras.map(function (p) { return String(p).replace(/\r\n?|\u000b/g, '\n').replace(/[ \t]+$/gm, ''); });
+  var i = -1;
+  for (var j = 0; j < paras.length && i < 0; j++) if (/^Subject:/.test(paras[j])) i = j;
   if (i < 0) return null;
-  return { subject: lines[i].replace(/^Subject:\s*/, '').trim(), body: lines.slice(i + 1).join('\n').replace(/^\n+|\s+$/g, '') + '\n' };
+  var first = paras[i].split('\n'), rest = first.slice(1).join('\n'), after = (rest.trim() ? [rest] : []).concat(paras.slice(i + 1));
+  var inner = after.slice(0), lineByLine;
+  while (inner.length && !inner[0].trim()) inner.shift();
+  while (inner.length && !inner[inner.length - 1].trim()) inner.pop();
+  lineByLine = inner.some(function (p) { return !p.trim(); });
+  var body = lineByLine ? inner.join('\n') : inner.map(function (p) { return p.replace(/^\n+|\n+$/g, ''); }).join('\n\n');
+  return { subject: first[0].replace(/^Subject:\s*/, '').trim(), body: body + '\n' };
 }
 
 function emailFor(cfg, it) {
   var tab = it.flow.tab;
-  return { tab: tab, t: (it.late && cfg.emails[tab + ' (late)']) || cfg.emails[tab] };
+  return { tab: tab, t: (it.late && cfg.emails[tabKey(tab + ' (late)')]) || cfg.emails[tabKey(tab)] };
 }
 
 /* '' when the item's text is usable, otherwise why not */
