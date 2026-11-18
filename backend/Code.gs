@@ -235,8 +235,8 @@ function uniqueId(sh, prefix) {
 
 /* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
    whether they declined (their old row says declined, or the address is in Unsubscribed with source nominee-declined, which
-   the accept page writes; a plain unsubscribe only stops emails). Declined cards are wiped in place, so their details reach neither
-   answers_json nor Nominees again. Same as the Worker's nomineePlan (backend-worker/src/index.js). */
+   the accept page writes). A declined card keeps its details until the 30-day deletion, only its decision is carried over
+   (Petr, 18 Nov 2026: a decline deletes nothing at once). Same as the Worker's nomineePlan (backend-worker/src/index.js). */
 var NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
 function nomineePlan(nominationId, cards) {
   if (!cards.length) return [];
@@ -254,7 +254,6 @@ function nomineePlan(nominationId, cards) {
     var email = lower(c.contact), old = null;
     for (var i = 0; email && i < mine.length && !old; i++) if (lower(mine[i].contact) === email) old = mine[i];
     var declined = !!email && (unsub[email] === 'nominee-declined' || (!!old && old.decision === 'declined'));
-    if (declined) { c.name = ''; c.contact = ''; c.affiliation = ''; c.why = ''; }
     return { old: old, declined: declined };
   });
 }
@@ -742,10 +741,9 @@ function logMail(row) {
 /* Nominee details are kept 30 days at most (privacy notice, site PR #39). Once a day this empties name, contact, affiliation
    and why in Nominees, and the nominee's card in the nomination's answers_json, exactly like the Worker's decline(), for:
    - every nominee nominated more than 30 days ago who neither accepted nor applied (no submitted application with the same
-     address); decision becomes 'expired';
-   - a row marked 'declined' that still holds details (the accept page wipes at once; this only catches leftovers).
-   Unsubscribing never deletes anything (Petr, 18 Nov 2026): it only stops the emails. Requests to delete go to the team as
-   an internal email (notifyDataRequests).
+     address), including those who declined; decision becomes 'expired' only when it was empty, so 'declined' stays.
+   Neither unsubscribing nor declining deletes anything at once (Petr, 18 Nov 2026): both only stop the emails, and a decline
+   or a request to delete reaches the team as an internal email (notifyDataRequests).
    apply=false only lists them (dry-run preview). Returns [{rec, reason}]. */
 function purgeNominees(cfg, apply) {
   var recs = mailRecords('N').filter(function (r) { return !r.wiped; });
@@ -755,8 +753,7 @@ function purgeNominees(cfg, apply) {
   recs.forEach(function (r) {
     var to = lower(r.contact);
     if (cfg.only && !cfg.only(to)) return;
-    if (r.decision === 'declined') out.push({ rec: r, reason: 'declined, details left over', decision: 'declined' });
-    else if (r.decision !== 'accepted' && isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS / DAY * dayMs(cfg, to) && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, neither accepted nor applied', decision: 'expired' });
+    if (r.decision !== 'accepted' && isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS / DAY * dayMs(cfg, to) && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, neither accepted nor applied' + (r.decision === 'declined' ? ' (declined)' : ''), decision: 'expired' });
   });
   if (!apply || !out.length) return out;
   var sh = mailSheet('N');
@@ -806,7 +803,8 @@ function notifyDataRequests(cfg, apply) {
     var m = { row: i + 2, to: to, subject: 'V4AIR data request: ' + addr,
       body: addr + ' asked us to delete their details (' + when + ', ' + (r[col.source] || 'no source') + ').\n\n' +
         'Where the address appears in the V4AIR forms Sheet:\n' + where(addr) + '\n\n' +
-        'Nothing has been deleted. Please delete these details by hand and reply to the person if they wrote to us.\n' +
+        (/declin/i.test(String(r[col.source])) ? 'No action needed: they declined their nomination, so we do not write to them again, and the mailer deletes their nominee details 30 days after the nomination.\n'
+          : 'Nothing has been deleted. Please delete these details by hand and reply to the person if they wrote to us.\n') +
         (ss.getUrl ? ss.getUrl() + '\n' : '') };
     out.push(m);
     if (!apply) return;
