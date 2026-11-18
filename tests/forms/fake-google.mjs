@@ -124,7 +124,7 @@ export function appsScript(book, opts) {
     a1() { return `'${this.sh.t.title.replace(/'/g, "''")}'!${colName(this.c)}${this.r}:${colName(this.c + this.nc - 1)}${this.r + this.nr - 1}`; }
     getValues() {
       const head = (this.sh.t.rows[0] || []).map(String), vals = readRange(book, this.a1()), out = [];
-      for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) { let x = (vals[i] || [])[j]; if (x === undefined) x = ''; if (typeof x === 'number' && DATES.includes(head[this.c - 1 + j])) x = fromSerial(x); row.push(x); } out.push(row); }
+      for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) { let x = (vals[i] || [])[j]; if (x === undefined) x = ''; if (typeof x === 'number' && (DATES.includes(head[this.c - 1 + j]) || /(_sent_at|^decided_at)$/.test(head[this.c - 1 + j] || ''))) x = fromSerial(x); row.push(x); } out.push(row); }
       return out;
     }
     setValues(v) { writeRange(book, this.a1(), v, false); return this; }

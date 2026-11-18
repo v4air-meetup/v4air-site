@@ -345,7 +345,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -395,7 +395,11 @@ var WANTS_STATUS = { confirm: 'submitted', resume: 'in progress', resume2: 'in p
    Redirect and live also need EMAIL_ENABLED=true and UNSUB_SECRET. MAIL_KINDS (comma separated kinds from FLOWS, e.g. 'confirm'
    or 'confirm, resume'; unset = all) switches kinds on one at a time. Backlog: a row saved before MAIL_START counts as saved
    at MAIL_START, so earlier applicants get their confirmation on day 0 and reminders count from go-live.
-   Nominee details: deleted once a day by purgeNominees in live mode, or when NOMINEE_PURGE=true. Texts: see loadEmails. */
+   Nominee details: deleted once a day by purgeNominees in live mode, or when NOMINEE_PURGE=true. Texts: see loadEmails.
+   Test mode: MAIL_ONLY (comma separated addresses, * matches any text, e.g. "chlupp+*@natur.cuni.cz") limits every email
+   and the nominee deletion to those addresses; all other rows stay as they are, MAIL_START is not stored and "Mail preview"
+   still shows what the others would get. MAIL_TEST_DAY_MINUTES shortens a "day" for those addresses only (every timing:
+   reminders, late texts, one email a day, the 30-day deletion), so a person can walk through every email in an afternoon. */
 function sendMail() {
   var props = PropertiesService.getScriptProperties();
   importSecrets(props);
@@ -407,7 +411,7 @@ function sendMail() {
     if (cfg.mode === 'dry') {
       writePreview(cfg);
     } else {
-      if (cfg.mode === 'live' && !props.getProperty('MAIL_START')) props.setProperty('MAIL_START', cfg.start.toISOString());
+      if (cfg.mode === 'live' && !cfg.only && !props.getProperty('MAIL_START')) props.setProperty('MAIL_START', cfg.start.toISOString());
       ['A', 'S', 'B', 'N'].forEach(function (form) {
         var sh = mailSheet(form);
         if (sh) addColumns(sh, header(sh), FLOWS.filter(function (f) { return f.form === form; }).map(function (f) { return f.kind + '_sent_at'; }));
@@ -415,9 +419,11 @@ function sendMail() {
       var log = emailLog(true), limit = cfg.resend ? RESEND_DAILY - log.sentToday : MailApp.getRemainingDailyQuota();
       var items = dueMail(cfg, log).filter(function (it) { return !it.skip; }).slice(0, Math.max(0, Math.min(MAIL_BATCH, limit)));
       for (var i = 0; i < items.length; i++) if (!sendOne(cfg, log, items[i])) break;
+      if (cfg.only) writePreview(cfg);
     }
     var today = Utilities.formatDate(cfg.now, 'Europe/Prague', 'yyyy-MM-dd');
-    if ((cfg.mode === 'live' || props.getProperty('NOMINEE_PURGE') === 'true') && props.getProperty('PURGE_DAY') !== today) {
+    if (cfg.mode === 'live' && cfg.only) purgeNominees(cfg, true); /* test mode: only the test nominees, on every run */
+    else if ((cfg.mode === 'live' || props.getProperty('NOMINEE_PURGE') === 'true') && props.getProperty('PURGE_DAY') !== today) {
       purgeNominees(cfg, true);
       props.setProperty('PURGE_DAY', today);
     }
@@ -433,7 +439,9 @@ function mailConfig(props) {
   var site = (p('SITE_URL') || 'https://v4air.eu/').replace(/\/?$/, '/');
   var mode = p('MAIL_MODE') === 'live' || p('MAIL_MODE') === 'redirect' ? p('MAIL_MODE') : 'dry';
   var list = function (k) { return p(k).toLowerCase().split(/[\s,;]+/).filter(String); };
-  var kinds = list('MAIL_KINDS'), redirect = list('MAIL_REDIRECT'), start = p('MAIL_START') ? new Date(p('MAIL_START')) : new Date();
+  var kinds = list('MAIL_KINDS'), redirect = list('MAIL_REDIRECT'), only = list('MAIL_ONLY');
+  /* test mode: no backlog shift for the test rows, which are new anyway */
+  var start = p('MAIL_START') ? new Date(p('MAIL_START')) : only.length ? new Date(0) : new Date();
   if (!/^https:\/\//.test(site) || isNaN(start)) return null;
   if (mode !== 'dry') {
     if (p('EMAIL_ENABLED') !== 'true') return null;
@@ -442,11 +450,18 @@ function mailConfig(props) {
   }
   var on = {};
   kinds.forEach(function (k) { on[k] = true; });
+  var res = only.map(function (x) { return new RegExp('^' + x.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$'); });
+  var minutes = +p('MAIL_TEST_DAY_MINUTES');
   var cfg = { site: site, mode: mode, kinds: kinds.length ? on : null, redirect: redirect, start: start, now: new Date(), resend: !!p('RESEND_API_KEY'),
+    only: res.length ? function (to) { to = lower(to); return res.some(function (r) { return r.test(to); }); } : null,
+    testDay: res.length && minutes > 0 ? minutes * 60 * 1000 : 0,
     secret: p('UNSUB_SECRET'), emails: {}, textError: '' };
   try { cfg.emails = loadEmails(p('EMAILS_DOC_ID') || EMAILS_DOC); } catch (e) { cfg.textError = 'cannot read the emails Doc: ' + String(e).slice(0, 120); }
   return cfg;
 }
+
+/* how long a "day" is for this address: shorter only for test addresses in test mode */
+function dayMs(cfg, to) { return cfg.only && cfg.testDay && cfg.only(to) ? cfg.testDay : DAY; }
 
 function mailSheet(form) {
   if (form === 'N') return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(NOMINEE_TAB);
@@ -497,15 +512,16 @@ function dueMail(cfg, log) {
       if (flow.until && cfg.now >= flow.until) return;
       var prevAt = flow.prev ? sentAt(cfg, log, flow, flow.prev, rec) : null;
       if (flow.prev && !prevAt) return;
-      var to = lower(rec.to), it = { flow: flow, rec: rec, skip: '' }, base = null;
+      var to = lower(rec.to), it = { flow: flow, rec: rec, skip: '' }, base = null, D = dayMs(cfg, to);
       if (flow.base === 'saved') base = rec.saved;
       else if (flow.base === 'sent') base = rec.sent;
       else if (flow.base === 'prev') base = isDate(prevAt) ? prevAt : null;
       if (base && flow.base !== 'prev') base = new Date(Math.max(base, cfg.start));
       var when = flow.kind === 'confirm' ? rec.sent : rec.saved;
-      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS && !!cfg.emails[flow.tab + ' (late)'];
+      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS / DAY * D && !!cfg.emails[flow.tab + ' (late)'];
       var problem = textProblem(cfg, it);
       if (!to) it.skip = flow.form === 'N' ? 'no email address (contact: ' + (rec.contact || 'empty') + ')' : 'no email';
+      else if (cfg.only && !cfg.only(to)) it.skip = 'test mode: not on MAIL_ONLY';
       else if (TEST_ADDRESS.test(to)) it.skip = 'test address';
       else if (unsub[to] === 'test') it.skip = 'test address (tab Unsubscribed, source test)';
       else if (flow.kind !== 'confirm' && unsub[to]) it.skip = 'unsubscribed';
@@ -514,20 +530,21 @@ function dueMail(cfg, log) {
       else if (/^nominate/.test(flow.kind) && (nominated[to] || nominated[String(rec.id).toUpperCase()])) it.skip = 'already nominated someone';
       else if (flow.form === 'N' && submitted.A[to]) it.skip = 'already applied';
       else if (flow.after && !base) it.skip = 'no date to count from';
-      else if (flow.after && cfg.now - base < flow.after * DAY) it.skip = 'not yet: due ' + Utilities.formatDate(new Date(+base + flow.after * DAY), 'Europe/Prague', 'dd.MM.yyyy HH:mm');
+      else if (flow.after && cfg.now - base < flow.after * D) it.skip = 'not yet: due ' + Utilities.formatDate(new Date(+base + flow.after * D), 'Europe/Prague', 'dd.MM.yyyy HH:mm');
       else if (problem) it.skip = problem;
       else if (cfg.kinds && !cfg.kinds[flow.kind]) it.skip = 'kind not switched on (MAIL_KINDS)';
       items.push(it);
     });
   });
   /* each reminder once per address, at most one email per person per day: the first one in FLOWS order goes */
-  var today = cfg.mode === 'redirect' ? log.redirectToday : log.liveToday, seen = {}, once = {};
-  Object.keys(today).forEach(function (k) { seen[k] = true; });
+  var today = cfg.mode === 'redirect' ? log.redirectToday : log.liveToday, last = cfg.mode === 'redirect' ? log.redirectLast : log.liveLast, seen = {}, once = {};
   items.forEach(function (it) {
     if (it.skip) return;
-    var to = lower(it.rec.to), key = it.flow.form + '|' + it.flow.kind + '|' + to;
+    var to = lower(it.rec.to), key = it.flow.form + '|' + it.flow.kind + '|' + to, D = dayMs(cfg, to);
+    /* a calendar day in Prague; a test address in test mode: a short rolling "day" */
+    var busy = seen[to] || (D === DAY ? !!today[to] : isDate(last[to]) && cfg.now - last[to] < D);
     if (once[key] && it.flow.kind !== 'confirm') it.skip = 'goes to this address from another row';
-    else if (seen[to]) it.skip = 'one email a day: waits for tomorrow';
+    else if (busy) it.skip = 'one email a day: waits for tomorrow';
     once[key] = true; seen[to] = true;
   });
   return items;
@@ -566,7 +583,7 @@ function sendOne(cfg, log, it) {
   }
   logMail([when, cfg.mode, flow.form, flow.kind + (it.late ? ' (late)' : ''), rec.id, rec.to, targets.join(', '), subject, ok ? 'sent' : 'failed', detail]);
   var book = live ? log.live : log.redirect;
-  if (ok) { book[key] = when; book[flow.form + '|' + flow.kind + '|@' + lower(rec.to)] = when; }
+  if (ok) { book[key] = when; book[flow.form + '|' + flow.kind + '|@' + lower(rec.to)] = when; (live ? log.liveLast : log.redirectLast)[lower(rec.to)] = when; }
   if (live) {
     var tries = (log.failures[key] || 0) + (ok ? 0 : 1), col = rec.col[flow.kind + '_sent_at'];
     /* marked only on success, or after MAX_TRIES failures, so a passing error is retried on later runs and one bad address cannot block the queue */
@@ -686,14 +703,18 @@ function unsubscribed() {
    today's count and addresses (Prague), and failed live attempts per email. create: make the tab if missing. */
 function emailLog(create) {
   var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(LOG_TAB);
-  var out = { sentToday: 0, liveToday: {}, redirectToday: {}, live: {}, redirect: {}, failures: {} };
+  var out = { sentToday: 0, liveToday: {}, redirectToday: {}, liveLast: {}, redirectLast: {}, live: {}, redirect: {}, failures: {} };
   if (!sh && create) { sh = ss.insertSheet(LOG_TAB); sh.getRange(1, 1, 1, LOG_HEAD.length).setValues([LOG_HEAD]); sh.setFrozenRows(1); }
   if (!sh || sh.getLastRow() < 2) return out;
   var day = function (d) { return isDate(d) ? Utilities.formatDate(d, 'Europe/Prague', 'yyyy-MM-dd') : ''; }, today = day(new Date());
   sh.getRange(2, 1, sh.getLastRow() - 1, LOG_HEAD.length).getValues().forEach(function (r) {
     var mode = r[1], kind = String(r[3]).replace(' (late)', ''), key = r[2] + '|' + kind + '|' + r[4], sent = r[8] === 'sent';
     var book = mode === 'redirect' ? out.redirect : out.live, at = isDate(r[0]) ? r[0] : true;
-    if (sent) { book[key] = at; book[r[2] + '|' + kind + '|@' + lower(r[5])] = at; }
+    if (sent) {
+      book[key] = at; book[r[2] + '|' + kind + '|@' + lower(r[5])] = at;
+      var lastBook = mode === 'redirect' ? out.redirectLast : out.liveLast, a = lower(r[5]);
+      if (isDate(at) && !(lastBook[a] >= at)) lastBook[a] = at;
+    }
     if (sent && day(r[0]) === today) { out.sentToday += String(r[6]).split(',').length; out[mode === 'redirect' ? 'redirectToday' : 'liveToday'][lower(r[5])] = true; }
     if (mode === 'live' && !sent) out.failures[key] = (out.failures[key] || 0) + 1;
   });
@@ -719,8 +740,9 @@ function purgeNominees(cfg, apply) {
   mailRecords('A').forEach(function (r) { if (r.status === 'submitted') applied[lower(r.to)] = true; });
   recs.forEach(function (r) {
     var to = lower(r.contact);
+    if (cfg.only && !cfg.only(to)) return;
     if (unsub[to]) out.push({ rec: r, reason: 'address in tab Unsubscribed', decision: 'declined' });
-    else if (isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, not applied', decision: 'expired' });
+    else if (isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS / DAY * dayMs(cfg, to) && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, not applied', decision: 'expired' });
   });
   if (!apply || !out.length) return out;
   var sh = mailSheet('N');

@@ -41,6 +41,11 @@ For every email: not to unsubscribed addresses (confirmations excepted) or test 
 15 January 2027; each reminder once per address; rows saved before go-live count as saved at go-live. Nominee details are
 deleted after 30 days by the daily check (`purgeNominees`), in live mode or with `NOMINEE_PURGE=true`.
 
+Test mode (live mail to test addresses only): `MAIL_MODE=live` plus `MAIL_ONLY` (comma separated, `*` matches any text,
+e.g. `chlupp+*@natur.cuni.cz`) sends real emails with working links to those addresses only; every other row stays untouched
+and `MAIL_START` is not stored. `MAIL_TEST_DAY_MINUTES=10` makes a "day" 10 minutes for those addresses (reminders, late texts,
+one email a day, the 30-day deletion). Delete the test rows afterwards, then remove both settings before the real go-live.
+
 Reading every email before go-live: `python3 tests/mail/fixture-from-doc.py`, then `node tests/mail/samples.mjs --out samples.txt`
 (all 17 with made-up data), or `--send <address>` to receive them through Resend.
 

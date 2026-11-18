@@ -270,5 +270,39 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   check('resubmitted nomination: the accepted nominee keeps decision, sent mark and 30-day clock', !!nick && nick.decision === 'accepted' && nick.invite_sent_at !== '' && Math.abs(nick.saved_at - at(-5)) < 1e-6, nick);
   check('resubmitted nomination: the declined nominee comes back wiped, in Nominees and answers_json', !!dee && !dee.name && !dee.contact && dee.decision === 'declined' && !card[1].contact && !card[1].name, [dee, card[1]]);
 }
+/* 12. test mode: only MAIL_ONLY addresses get anything, on short "days"; real rows are left exactly as they are */
+{
+  const T0 = Date.UTC(2026, 10, 20, 9, 0), clock = { now: T0 }, MIN = 60e3, atm = m => serial(new Date(T0 + m * MIN));
+  const NHEAD = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why', 'saved_at'];
+  const seed = book => {
+    book.seed('Applications', HEAD, [
+      ['V4A-REAL-AAAA', 'real', 'submitted', atm(-60 * 24 * 5), atm(-60 * 24 * 5), atm(-60 * 24 * 5), '', '{}', 'Real', 'real@uni.cz'],
+      ['V4A-TEST-AAAA', 'h1', 'submitted', atm(-1), atm(-1), atm(-1), '', '{}', 'Petr', 'chlupp+t1@natur.cuni.cz'],
+      ['V4A-TEST-BBBB', 'h2', 'in progress', atm(-1), atm(-1), '', '', '{}', 'Petr', 'chlupp+t2@natur.cuni.cz']
+    ]);
+    book.seed('Speakers', HEAD, []);
+    book.seed('Nominations', ['response_id', 'status', 'answers_json'], [['V4N-TEST-CCCC', 'in progress', JSON.stringify({ __cards: [{ name: 'N', contact: 'chlupp+n1@natur.cuni.cz' }] })]]);
+    book.seed('Nominees', NHEAD, [
+      ['V4N-TEST-CCCC', '', 'Petr', 'chlupp+t1@natur.cuni.cz', 1, 'researcher', 'Petr N', 'chlupp+n1@natur.cuni.cz', 'X', 'test', atm(-1)],
+      ['V4N-REAL-DDDD', '', 'Ana', 'ana@uni.cz', 1, 'researcher', 'Old', 'old-real@uni.cz', 'Y', 'w', atm(-60 * 24 * 40)]
+    ]);
+  };
+  const t = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's', RESEND_API_KEY: 'k', MAIL_ONLY: 'chlupp+*@natur.cuni.cz', MAIL_TEST_DAY_MINUTES: '10' }, { seed, clock });
+  const at = m => { clock.now = T0 + m * MIN; t.run(); };
+  const to = () => t.sent.map(m => m.to[0] + ' | ' + m.subject).sort();
+  at(0);
+  check('test mode: only test addresses, MAIL_START not stored', JSON.stringify(to()) === JSON.stringify(['chlupp+n1@natur.cuni.cz | You were nominated for V4AIR', 'chlupp+t1@natur.cuni.cz | We received your V4AIR application V4A-TEST-AAAA']) && t.prop('MAIL_START') === null, [to(), t.prop('MAIL_START')]);
+  const real = rows(t.book, 'Applications')[0], prev = by(rows(t.book, 'Mail preview'), 'V4A-REAL-AAAA')[0];
+  check('test mode: the real row is untouched, the preview says why it waits', real.token_hash === 'real' && !real.confirm_sent_at && /not on MAIL_ONLY/.test(prev.skip_reason), [real.token_hash, real.confirm_sent_at, prev && prev.skip_reason]);
+  check('test mode: the test email has a working personal link and a real unsubscribe link', /apply\/\?id=V4A-TEST-AAAA&t=[0-9a-f-]{40,}/.test(t.sent.find(m => /application V4A-TEST/.test(m.subject)).body), t.sent[0].body.slice(0, 200));
+  let n = t.sent.length; at(11);
+  check('test mode: a "day" is 10 minutes: resume after 11 minutes', JSON.stringify(t.sent.slice(n).map(m => m.subject)) === JSON.stringify(['Your V4AIR application is saved']), t.sent.slice(n).map(m => m.subject));
+  for (let m = 15; m <= 300; m += 5) { at(m); }
+  const subj = t.sent.map(m => m.to[0].replace('@natur.cuni.cz', '') + ' ' + m.subject);
+  check('test mode: the chains run within 5 hours', ['chlupp+t2 Your V4AIR application is not sent yet', 'chlupp+t1 One request about V4AIR', 'chlupp+t1 Who else should be at V4AIR?', 'chlupp+t1 One last request about V4AIR', 'chlupp+n1 Your V4AIR nomination'].every(x => subj.includes(x)), subj);
+  const nom = rows(t.book, 'Nominees');
+  check('test mode: the test nominee is deleted after 30 short days, the real old nominee is not touched', !nom[0].contact && nom[0].decision === 'expired' && nom[1].contact === 'old-real@uni.cz' && !nom[1].decision, nom.map(r => [r.contact, r.decision]));
+  check('test mode: nothing ever went to a real address', t.sent.every(m => /^chlupp\+/.test(m.to[0])), t.sent.map(m => m.to[0]));
+}
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
