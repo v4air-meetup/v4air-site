@@ -37,6 +37,9 @@ jobs:
       - name: Forms data test (answers land in the right Sheet columns, old data unchanged)
         if: always()
         run: npm run forms
+      - name: Accept-nomination test (consent recorded, a no wipes the nominee, page flow)
+        if: always()
+        run: npm run nominee
       - name: Site check (no page errors or broken links, copy rules, phone width)
         if: always()
         run: npm run site

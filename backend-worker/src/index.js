@@ -32,6 +32,7 @@ export default {
       if (req.action === 'load') return json(await load(g, req), cors);
       if (req.action === 'save') return json(await save(g, req), cors);
       if (req.action === 'unsubscribe') return json(await unsubscribe(g, env, req.e, req.t, 'page'), cors);
+      if (req.action === 'nomination') return json(await nomination(g, env, req), cors);
       return json({ ok: false, error: 'bad_action' }, cors);
     } catch (err) {
       console.error(err && err.stack || String(err));
@@ -71,6 +72,7 @@ async function unsubscribe(g, env, e, t, source) {
   const email = decodeEmail(e);
   if (!email || !(await verifyUnsub(env, email, t))) return { ok: false, error: 'bad_link' };
   const added = await recordUnsub(g, email, source);
+  await declineByEmail(g, email); /* a nominee who unsubscribes is treated as a "no": their details go too */
   return { ok: true, email, added };
 }
 
@@ -101,6 +103,87 @@ async function recordUnsub(g, email, source) {
   if (have.slice(1).some(v => v.trim().toLowerCase() === email)) return false;
   await g.append(UNSUB_TAB, [[email, pragueNow(), source]]);
   return true;
+}
+
+/* ---------- accept a nomination ----------
+   The nominee emails link to https://v4air.eu/accept-nomination/?id=<nomination id>.<n>&t=<token>, where n is the
+   nominee's number within the nomination (column n of tab Nominees) and
+   token = b64url(HMAC-SHA256(UNSUB_SECRET, 'nomination:' + id)), id being the whole "V4N-XXXX-XXXX.n".
+   Code.gs makes the same link for the {ACCEPT_LINK} placeholder. The page posts {action:'nomination', id, t[, decision]}:
+     no decision    -> who nominated them and the current state (open / accepted / declined / gone)
+     decision 'yes' -> consent recorded (decision, decided_at, decision_notice = privacy notice version); the page then
+                       opens the application form
+     decision 'no'  -> the nominee's details are deleted at once (their cells in Nominees and their card in the
+                       nomination's answers_json), and the address goes to tab Unsubscribed, so nobody writes to them again.
+   A nominee who does nothing is deleted 30 days after the nomination by the mailer (Code.gs), not here. */
+const NOM_TAB = 'Nominees', NOM_COLS = ['decision', 'decided_at', 'decision_notice'], NOM_WIPE = ['name', 'contact', 'affiliation', 'why'];
+const NOM_ID_RE = /^(V4N-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4})\.([1-9])$/, NOTICE_RE = /^privacy-v[0-9]{1,3}$/;
+
+async function nomination(g, env, req) {
+  const m = NOM_ID_RE.exec(String(req.id || ''));
+  if (!m || !(await verifyToken(env, 'nomination:' + req.id, req.t))) return { ok: false, error: 'bad_link' };
+  let { head, rows } = await readTab(g, NOM_TAB);
+  const i = rows.findIndex(r => String(r[0]) === m[1] && String(r[head.indexOf('n')]) === m[2]);
+  const rec = i < 0 ? null : Object.fromEntries(head.map((h, k) => [h, rows[i][k] === undefined ? '' : rows[i][k]]));
+  if (!rec || (!rec.name && !rec.contact)) return { ok: true, state: rec && rec.decision === 'declined' ? 'declined' : 'gone' };
+  const state = rec.decision || 'open';
+  if (!req.decision || state === 'declined') return { ok: true, state, name: String(rec.name), nominator: String(rec.nominator_name) };
+  if (req.decision !== 'yes' && req.decision !== 'no') return { ok: false, error: 'bad_request' };
+  if (req.decision === 'yes' && !NOTICE_RE.test(String(req.notice || ''))) return { ok: false, error: 'notice' };
+  head = await g.addColumns(NOM_TAB, head, NOM_COLS);
+  if (req.decision === 'yes') {
+    if (state !== 'accepted') await writeRecord(g, NOM_TAB, i + 2, head, rec, { decision: 'accepted', decided_at: pragueNow(), decision_notice: req.notice });
+    return { ok: true, state: 'accepted' };
+  }
+  await decline(g, head, i + 2, rec);
+  return { ok: true, state: 'declined' };
+}
+
+/* wipes one nominee: their cells in Nominees, their card in the nomination's answers_json, plus a do-not-write entry */
+async function decline(g, head, row, rec) {
+  const email = String(rec.contact).trim().toLowerCase();
+  const set = { decision: 'declined', decided_at: pragueNow() };
+  NOM_WIPE.forEach(k => { set[k] = ''; });
+  await writeRecord(g, NOM_TAB, row, head, rec, set);
+  const noms = await readTab(g, 'Nominations'), j = noms.rows.findIndex(r => String(r[0]) === String(rec.nomination_id)), col = noms.head.indexOf('answers_json');
+  if (j >= 0 && col >= 0) {
+    let a = {};
+    try { a = JSON.parse(noms.rows[j][col] || '{}'); } catch (e) { a = {}; }
+    const c = (a.__cards || [])[+rec.n - 1];
+    if (c) { Object.assign(c, { name: '', contact: '', affiliation: '', why: '' }); await g.call('/values/' + encodeURIComponent(q('Nominations') + '!' + colName(col + 1) + (j + 2)) + '?valueInputOption=RAW', { method: 'PUT', body: JSON.stringify({ values: [[JSON.stringify(a)]] }) }); }
+  }
+  if (EMAIL_RE.test(email)) await recordUnsub(g, email, 'nominee-declined');
+}
+
+async function declineByEmail(g, email) {
+  let { head, rows } = await readTab(g, NOM_TAB);
+  const c = head.indexOf('contact'), d = head.indexOf('decision');
+  const hit = rows.map((r, i) => i).filter(i => String(rows[i][c] || '').trim().toLowerCase() === email && rows[i][d] !== 'declined');
+  if (!hit.length) return;
+  head = await g.addColumns(NOM_TAB, head, NOM_COLS);
+  for (const i of hit) await decline(g, head, i + 2, Object.fromEntries(head.map((h, k) => [h, rows[i][k] === undefined ? '' : rows[i][k]])));
+}
+
+async function readTab(g, tab) {
+  const j = await g.call('/values/' + encodeURIComponent(q(tab) + '!A:ZZ') + '?valueRenderOption=UNFORMATTED_VALUE');
+  const v = j.values || [];
+  return { head: (v[0] || []).map(String), rows: v.slice(1) };
+}
+/* writes the whole row back with `set` applied: RAW, so the other cells keep exactly what was read (a name like 0123
+   stays text); decided_at is then written USER_ENTERED, so Sheets stores it as a date like every other *_at column */
+async function writeRecord(g, tab, row, head, rec, set) {
+  const vals = head.map(h => (h === 'decided_at' ? '' : h in set ? set[h] : rec[h] === undefined ? '' : rec[h]));
+  await g.call('/values/' + encodeURIComponent(q(tab) + '!A' + row) + '?valueInputOption=RAW', { method: 'PUT', body: JSON.stringify({ values: [vals] }) });
+  const d = head.indexOf('decided_at');
+  if (d >= 0) await g.call('/values/' + encodeURIComponent(q(tab) + '!' + colName(d + 1) + row) + '?valueInputOption=USER_ENTERED', { method: 'PUT', body: JSON.stringify({ values: [[set.decided_at || rec.decided_at || '']] }) });
+}
+
+async function verifyToken(env, msg, t) {
+  if (!env.UNSUB_SECRET || typeof t !== 'string' || t.length !== 43) return false;
+  const want = await unsubToken(env, msg);
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ t.charCodeAt(i);
+  return diff === 0;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
