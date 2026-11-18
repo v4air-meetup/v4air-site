@@ -1,4 +1,5 @@
-/* The forms mailer (sendMail in backend/Code.gs, texts in backend/Emails.gs) on imitated Apps Script services.
+/* The forms mailer (sendMail in backend/Code.gs) on imitated Apps Script services. Its texts come from a copy of the Doc
+   "V4AIR form emails" (fixtures/emails-doc.json, refreshed by fixture-from-doc.py).
    Nothing reaches Google, Gmail or Resend: deliveries are recorded. Run: node mail/run.mjs (from tests/). */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,7 +20,10 @@ function prague(d, pattern) {
   return pattern.replace(/yyyy|MM|M|dd|d|HH|mm/g, t => ({ yyyy: p.year, MM: two(p.month), M: String(+p.month), dd: two(p.day), d: String(+p.day), HH: two(p.hour), mm: two(p.minute) }[t]));
 }
 
-function setup(props, { resend = 200, unsub = [] } = {}) {
+const DOC = JSON.parse(readFileSync(new URL('./fixtures/emails-doc.json', import.meta.url)));
+const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Error('no access'); const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => ({ getText: () => t.text }) }), getChildTabs: () => t.children.map(wrap) }); return { getTabs: () => tabs.map(wrap), getName: () => 'emails' }; } });
+
+function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false } = {}) {
   const book = new Book();
   book.seed('Applications', HEAD, [
     ['V4A-OLD1-AAAA', 'h1', 'submitted', ago(31), ago(30), ago(30), '', '{}', 'Olga', 'old@uni.cz'],
@@ -43,6 +47,7 @@ function setup(props, { resend = 200, unsub = [] } = {}) {
       computeHmacSha256Signature: (v, k) => [...createHmac('sha256', k).update(v).digest()].map(b => (b > 127 ? b - 256 : b)),
       formatDate: (d, tz, pattern) => prague(d, pattern)
     },
+    DocumentApp: docApp(doc, brokenDoc),
     DriveApp: { getRootFolder: () => ({ getFilesByName: () => ({ hasNext: () => false }) }) },
     MailApp: { getRemainingDailyQuota: () => 100 },
     GmailApp: { sendEmail: (to, subject, body) => sent.push({ via: 'gmail', to: to.split(','), subject, body }) },
@@ -51,7 +56,6 @@ function setup(props, { resend = 200, unsub = [] } = {}) {
         const code = typeof resend === 'function' ? resend() : resend; return { getResponseCode: () => code, getContentText: () => (code === 200 ? '{"id":"re_1"}' : 'error') }; }
     }
   }));
-  vm.runInContext(readFileSync(path.join(ROOT, 'backend/Emails.gs'), 'utf8'), ctx);
   vm.runInContext(readFileSync(path.join(ROOT, 'backend/Code.gs'), 'utf8'), ctx);
   const live = ctx.PropertiesService.getScriptProperties();
   return { book, sent, run: () => ctx.sendMail(), prop: k => live.getProperty(k) };
@@ -125,6 +129,20 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
     const x = setup(props); x.run();
     check(name + ': sends nothing, writes nothing', x.sent.length === 0 && !x.book.tab('Email log') && !x.book.tab('Mail preview'), x.sent.length);
   }
+}
+/* 6. texts come from the Doc at run time; a broken text or an unreadable Doc stops that email, not the run */
+{
+  const edited = JSON.parse(JSON.stringify(DOC));
+  edited.find(t => t.title === 'Application confirmation').text = edited.find(t => t.title === 'Application confirmation').text.replace('Thank you. We received', 'EDITED IN THE DOC. We received');
+  edited.find(t => t.title === 'Application resume (late)').text += '\n{OOPS}';
+  const t = setup({ MAIL_START: new Date(now - 2 * DAY).toISOString() }, { doc: edited });
+  t.run();
+  const p = rows(t.book, 'Mail preview'), fresh = by(p, 'V4A-NEW1-AAAA')[0], drf = by(p, 'V4A-DRF1-AAAA')[0];
+  check('doc: an edit in the Doc is used on the next run', /EDITED IN THE DOC/.test(fresh.body), fresh.body.slice(0, 80));
+  check('doc: an unknown placeholder stops that email, with the reason', drf.would_send === 'no' && /unknown placeholder \{OOPS\}/.test(drf.skip_reason), drf.skip_reason);
+  const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's' }, { brokenDoc: true });
+  u.run();
+  check('doc: unreadable Doc sends nothing', u.sent.length === 0, u.sent.length);
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);

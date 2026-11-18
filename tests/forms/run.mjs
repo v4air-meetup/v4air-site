@@ -61,7 +61,6 @@ const ctx = vm.createContext(Object.assign(appsScript(book), {
     formatDate: d => new Date(d).toISOString()
   }
 }));
-vm.runInContext(readFileSync(path.join(ROOT, 'backend/Emails.gs'), 'utf8'), ctx, { filename: 'Emails.gs' });
 vm.runInContext(readFileSync(path.join(ROOT, 'backend/Code.gs'), 'utf8'), ctx, { filename: 'Code.gs' });
 http.createServer(async (req, res) => {
   const b = await body(req), send = (code, s) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(s); };

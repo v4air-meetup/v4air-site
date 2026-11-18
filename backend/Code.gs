@@ -60,6 +60,7 @@ function setup() {
   UrlFetchApp.getRequest('https://api.resend.com/emails'); /* same for external requests (Resend); sends nothing */
   if (!props.getProperty('RESEND_API_KEY') && GmailApp.getAliases().indexOf(MAIL_FROM) === -1) throw new Error('Gmail cannot send as ' + MAIL_FROM);
   uploadRoot(); /* same for Drive */
+  DocumentApp.openById(props.getProperty('EMAILS_DOC_ID') || EMAILS_DOC).getName(); /* same for reading the email texts */
   if (!ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'sendMail'; })) ScriptApp.newTrigger('sendMail').timeBased().everyMinutes(5).create();
 }
 
@@ -300,7 +301,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    {"RESEND_API_KEY": "re_...", "UNSUB_SECRET": "...", "MAIL_MODE": "redirect"}, is read into script properties on the next run
    and trashed. Only the keys listed here are accepted. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
-var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START'];
+var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START', 'EMAILS_DOC_ID'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, RESUME_AFTER_MS = 24 * HOUR, LATE_MS = 3 * 24 * HOUR, MAX_TRIES = 3;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: no application reminders after it */
@@ -322,7 +323,7 @@ var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'A
    Redirect and live also need EMAIL_ENABLED=true and UNSUB_SECRET. MAIL_KINDS ('confirm', 'resume' or both, comma separated;
    unset = all) switches kinds on one at a time. Backlog: a row saved before MAIL_START counts as saved at MAIL_START, so earlier
    applicants get their confirmation on day 0 and reminders count from go-live; a confirmation or resume more than 3 days after
-   the form was sent or last saved uses the "(late)" text, which says why it comes now. Other script properties: SITE_URL, RESEND_*. */
+   the form was sent or last saved uses the "(late)" text, which says why it comes now. Texts: see loadEmails. Other script properties: SITE_URL, RESEND_*. */
 function sendMail() {
   var props = PropertiesService.getScriptProperties();
   importSecrets(props);
@@ -358,7 +359,9 @@ function mailConfig(props) {
   }
   var on = {};
   kinds.forEach(function (k) { on[k] = true; });
-  return { site: site, mode: mode, kinds: kinds.length ? on : null, redirect: redirect, start: start, now: new Date(), resend: !!p('RESEND_API_KEY') };
+  var cfg = { site: site, mode: mode, kinds: kinds.length ? on : null, redirect: redirect, start: start, now: new Date(), resend: !!p('RESEND_API_KEY'), emails: {}, textError: '' };
+  try { cfg.emails = loadEmails(p('EMAILS_DOC_ID') || EMAILS_DOC); } catch (e) { cfg.textError = 'cannot read the emails Doc: ' + String(e).slice(0, 120); }
+  return cfg;
 }
 
 /* Everything due now, in sending order (confirmations first), without changing anything.
@@ -389,6 +392,7 @@ function dueMail(cfg, log) {
         else if (kind === 'resume' && done[lower(to)]) it.skip = 'same email already submitted this form';
         else if (kind === 'resume' && form === 'A' && cfg.now >= DEADLINE) it.skip = 'after the application deadline';
         else if (kind === 'resume' && cfg.now - base < RESUME_AFTER_MS) it.skip = 'not yet: resume goes 24 h after the last save (or after go-live)';
+        else if (textProblem(cfg, it)) it.skip = textProblem(cfg, it);
         else if (cfg.kinds && !cfg.kinds[kind]) it.skip = 'kind not switched on (MAIL_KINDS)';
         else if (cfg.mode === 'redirect' && log.redirected[key]) it.skip = 'already sent in redirect mode';
         items.push(it);
@@ -438,10 +442,57 @@ function mailLink(site, form, id, token) {
   return site + (form === 'S' ? 'invited-speaker/' : 'apply/') + '?id=' + encodeURIComponent(id) + '&t=' + encodeURIComponent(token);
 }
 
-/* The text from EMAILS (backend/Emails.gs, generated from the Doc "V4AIR form emails") with the placeholders filled in. */
+/* The email texts live in a Google Doc, never in this code: one tab per email, named as in EMAIL_TABS (a "(late)" tab is
+   optional), each with a line "Subject: ..." and the body after it; lines above the subject (the Doc's "Sent:" rule) are ignored.
+   Script property EMAILS_DOC_ID picks the Doc (default: "V4AIR form emails"; Typecase can export into another Doc of the same shape).
+   The Doc is read once per run, so an edit there goes out from the next run on. An email whose text is missing or has an
+   unknown placeholder, no {LINK} or no {UNSUBSCRIBE_LINK} is not sent; the preview says why. */
+var EMAILS_DOC = '1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g';
 var EMAIL_TABS = { A: { confirm: 'Application confirmation', resume: 'Application resume' }, S: { confirm: 'Speaker confirmation', resume: 'Speaker resume' } };
+var PLACEHOLDERS = ['NAME', 'ID', 'LINK', 'NOMINATE_LINK', 'UNSUBSCRIBE_LINK', 'SENT_DATE', 'STARTED_DATE'];
+
+function loadEmails(id) {
+  var out = {};
+  var walk = function (tabs) {
+    tabs.forEach(function (t) {
+      var e = parseEmail(t.asDocumentTab().getBody().getText());
+      if (e) out[t.getTitle().trim()] = e;
+      walk(t.getChildTabs());
+    });
+  };
+  walk(DocumentApp.openById(id).getTabs());
+  return out;
+}
+
+/* {subject, body} from one tab's text, or null when the tab has no "Subject:" line (such as "How it works") */
+function parseEmail(text) {
+  var lines = String(text).replace(/\r\n?|\u000b/g, '\n').split('\n'), i = -1;
+  for (var j = 0; j < lines.length && i < 0; j++) if (/^Subject:/.test(lines[j])) i = j;
+  if (i < 0) return null;
+  return { subject: lines[i].replace(/^Subject:\s*/, '').trim(), body: lines.slice(i + 1).join('\n').replace(/^\n+|\s+$/g, '') + '\n' };
+}
+
+function emailFor(cfg, it) {
+  var tab = EMAIL_TABS[it.form][it.kind];
+  return { tab: tab, t: (it.late && cfg.emails[tab + ' (late)']) || cfg.emails[tab] };
+}
+
+/* '' when the item's text is usable, otherwise why not */
+function textProblem(cfg, it) {
+  if (cfg.textError) return cfg.textError;
+  var e = emailFor(cfg, it), all = e.t ? e.t.subject + '\n' + e.t.body : '';
+  if (!e.t) return 'no tab "' + e.tab + '" with a Subject line in the emails Doc';
+  if (!e.t.subject) return 'empty subject in tab "' + e.tab + '"';
+  var bad = (all.match(/\{[A-Z_]+\}/g) || []).filter(function (x) { return PLACEHOLDERS.indexOf(x.slice(1, -1)) === -1; });
+  if (bad.length) return 'unknown placeholder ' + bad[0] + ' in tab "' + e.tab + '"';
+  if (e.t.body.indexOf('{LINK}') === -1) return 'no {LINK} in tab "' + e.tab + '"';
+  if (e.t.body.indexOf('{UNSUBSCRIBE_LINK}') === -1) return 'no {UNSUBSCRIBE_LINK} in tab "' + e.tab + '"';
+  return '';
+}
+
+/* The item's text from the emails Doc with the placeholders filled in */
 function emailText(cfg, it, link, unsubLink) {
-  var tab = EMAIL_TABS[it.form][it.kind], t = (it.late && EMAILS[tab + ' (late)']) || EMAILS[tab];
+  var e = emailFor(cfg, it), tab = e.tab, t = e.t;
   if (!t) throw new Error('no email text for ' + tab);
   var fill = {
     ID: it.id, LINK: link, UNSUBSCRIBE_LINK: unsubLink, SENT_DATE: dayText(it.sent), STARTED_DATE: dayText(it.started || it.sent),
@@ -449,7 +500,7 @@ function emailText(cfg, it, link, unsubLink) {
   };
   var put = function (s) {
     s = s.replace(/ \{NAME\}/g, it.name ? ' ' + it.name : '').replace(/\{NAME\}/g, it.name);
-    return s.replace(/\{([A-Z_]+)\}/g, function (all, k) { if (!(k in fill)) throw new Error(tab + ': unknown placeholder ' + all); return fill[k]; });
+    return s.replace(/\{([A-Z_]+)\}/g, function (all, k) { return k in fill ? fill[k] : all; });
   };
   return { subject: put(t.subject), body: put(t.body) };
 }
@@ -502,7 +553,7 @@ function writePreview(cfg) {
   var stamp = Utilities.formatDate(cfg.now, 'Europe/Prague', 'dd.MM.yyyy HH:mm');
   var rows = [['generated_at', 'would_send', 'skip_reason', 'form', 'kind', 'late', 'response_id', 'to', 'from', 'subject', 'body']];
   dueMail(cfg, emailLog(false)).forEach(function (it) {
-    var m = emailText(cfg, it, '<personal link, made at send time>', unsubscribeLink(it.to) || '<unsubscribe link: UNSUB_SECRET is not set yet>');
+    var m = emailFor(cfg, it).t ? emailText(cfg, it, '<personal link, made at send time>', unsubscribeLink(it.to) || '<unsubscribe link: UNSUB_SECRET is not set yet>') : { subject: '', body: '' };
     rows.push([stamp, it.skip ? 'no' : 'yes', it.skip, it.form, it.kind, it.late ? 'yes' : '', it.id, it.to, from, m.subject, m.body]);
   });
   var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(PREVIEW_TAB) || ss.insertSheet(PREVIEW_TAB);
