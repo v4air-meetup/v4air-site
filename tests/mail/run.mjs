@@ -208,6 +208,7 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   day(31);
   const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards || [];
   check('day 31: the undecided nominee is deleted; the one who accepted and the one who applied are kept', nom[0].contact === 'nick@uni.cz' && nom[0].decision === 'accepted' && !nom[1].contact && nom[1].decision === 'expired' && nom[2].contact === 'applied@uni.cz' && card[0].contact === 'nick@uni.cz' && !card[1].contact && card[2].contact === 'applied@uni.cz', nom.map(r => [r.name, r.contact, r.decision]));
+  check('day 31: the nominee who declined is deleted too, decision stays declined', !nom[3].contact && nom[3].decision === 'declined', nom[3]);
   check('greetings use the first name', /^Hello Ana,/m.test(t.sent.find(m => m.to[0] === 'app@uni.cz').body) && /^Hello Nick,/m.test(inv.body), [t.sent[0].body.slice(0, 40), inv.body.slice(0, 40)]);
   check('every email went at most once per form, kind and address', new Set(rows(t.book, 'Email log').map(r => r.form + r.kind + r.to)).size === rows(t.book, 'Email log').length, rows(t.book, 'Email log').map(r => r.kind + ' ' + r.to));
 }
@@ -270,7 +271,7 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const nick = nom.find(x => x.contact === 'nick@uni.cz'), dee = nom.find(x => x.n === 2);
   check('resubmitted nomination: saved', r.ok === true, r);
   check('resubmitted nomination: the accepted nominee keeps decision, sent mark and 30-day clock', !!nick && nick.decision === 'accepted' && nick.invite_sent_at !== '' && Math.abs(nick.saved_at - at(-5)) < 1e-6, nick);
-  check('resubmitted nomination: the declined nominee comes back wiped, in Nominees and answers_json', !!dee && !dee.name && !dee.contact && dee.decision === 'declined' && !card[1].contact && !card[1].name, [dee, card[1]]);
+  check('resubmitted nomination: the declined nominee keeps the details and the decision declined (deleted at 30 days)', !!dee && dee.contact === 'dee@uni.cz' && dee.decision === 'declined' && card[1].contact === 'dee@uni.cz', [dee, card[1]]);
   const pia = nom.find(x => x.n === 3);
   check('resubmitted nomination: a plain unsubscribe does not wipe anyone', !!pia && pia.contact === 'plain@uni.cz' && card[2].contact === 'plain@uni.cz' && !pia.decision, pia);
 }
@@ -316,14 +317,15 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
     book.seed('Speakers', HEAD, []);
     book.seed('Nominations', ['response_id', 'status', 'answers_json'], []);
     book.seed('Nominees', ['nomination_id', 'n', 'name', 'contact', 'nominator_name', 'saved_at'], [['V4N-KEEP-BBBB', 1, 'Kim', 'kim@uni.cz', 'Ana', at(-2)]]);
-    book.seed('Data requests', ['email', 'requested_at', 'source'], [['kim@uni.cz', at(-0.01), 'unsubscribe page']]);
+    book.seed('Data requests', ['email', 'requested_at', 'source'], [['kim@uni.cz', at(-0.01), 'unsubscribe page'], ['dec@uni.cz', at(-0.01), 'nominee declined on the accept page']]);
   };
   const t = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's', RESEND_API_KEY: 'k', MAIL_START: new Date(T0 - 5 * DAY).toISOString() }, { seed, unsub: ['kim@uni.cz'], clock: { now: T0 } });
   t.run(); t.run();
   const internal = t.sent.filter(m => m.to[0] === 'data@v4air.eu');
   check('unsubscribed: no email to the person, nothing deleted', !t.sent.some(m => m.to[0] === 'kim@uni.cz' && !/We received/.test(m.subject)) && rows(t.book, 'Nominees')[0].contact === 'kim@uni.cz' && rows(t.book, 'Applications').length === 1, t.sent.map(m => m.to[0] + ' ' + m.subject));
-  check('data request: one internal email to data@v4air.eu listing where the address is', internal.length === 1 && /V4A-KEEP-AAAA/.test(internal[0].body) && /V4N-KEEP-BBBB.1/.test(internal[0].body) && /Nothing has been deleted/.test(internal[0].body) && !internal[0].headers, internal.map(m => m.body));
-  check('data request: marked, not sent twice', rows(t.book, 'Data requests')[0].notified_at !== '', rows(t.book, 'Data requests')[0]);
+  check('data request after a decline: internal email says no action needed', internal.some(m => /dec@uni.cz/.test(m.subject) && /No action needed/.test(m.body)), internal.map(m => m.subject));
+  check('data request: one internal email to data@v4air.eu listing where the address is', internal.filter(m => /kim@/.test(m.subject)).length === 1 && /V4A-KEEP-AAAA/.test(internal[0].body) && /V4N-KEEP-BBBB.1/.test(internal[0].body) && /Nothing has been deleted/.test(internal[0].body) && !internal[0].headers, internal.map(m => m.body));
+  check('data request: marked, not sent twice', rows(t.book, 'Data requests').every(r => r.notified_at !== '') && internal.length === 2, rows(t.book, 'Data requests'));
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
