@@ -33,6 +33,7 @@ export default {
       if (req.action === 'save') return json(await save(g, req), cors);
       if (req.action === 'unsubscribe') return json(await unsubscribe(g, env, req.e, req.t, 'page'), cors);
       if (req.action === 'nomination') return json(await nomination(g, env, req), cors);
+      if (req.action === 'data_request') return json(await dataRequest(g, env, req.e, req.t), cors);
       return json({ ok: false, error: 'bad_action' }, cors);
     } catch (err) {
       console.error(err && err.stack || String(err));
@@ -71,9 +72,23 @@ async function unsubscribeHttp(request, env, url, cors) {
 async function unsubscribe(g, env, e, t, source) {
   const email = decodeEmail(e);
   if (!email || !(await verifyUnsub(env, email, t))) return { ok: false, error: 'bad_link' };
-  const added = await recordUnsub(g, email, source);
-  await declineByEmail(g, email); /* a nominee who unsubscribes is treated as a "no": their details go too */
+  const added = await recordUnsub(g, email, source); /* stops emails only: unsubscribing never deletes details (Petr, 18 Nov 2026) */
   return { ok: true, email, added };
+}
+
+/* ---------- data requests ----------
+   The unsubscribe page can also ask us to delete someone's details. That only appends a row to tab "Data requests"
+   (email, requested_at, source); nothing is deleted here. The mailer (Code.gs notifyDataRequests) sends each new row
+   once to data@v4air.eu, and Petr or Peter delete by hand. Same link and token as unsubscribe. */
+const DATA_TAB = 'Data requests', DATA_HEAD = ['email', 'requested_at', 'source'];
+async function dataRequest(g, env, e, t) {
+  const email = decodeEmail(e);
+  if (!email || !(await verifyUnsub(env, email, t))) return { ok: false, error: 'bad_link' };
+  await g.ensureTab(DATA_TAB, DATA_HEAD);
+  const { head, rows } = await readTab(g, DATA_TAB), n = head.indexOf('notified_at');
+  const open = rows.some(r => String(r[0]).trim().toLowerCase() === email && (n < 0 || !r[n]));
+  if (!open) await g.append(DATA_TAB, [[email, pragueNow(), 'unsubscribe page']]);
+  return { ok: true, email };
 }
 
 function decodeEmail(e) {
@@ -114,7 +129,8 @@ async function recordUnsub(g, email, source) {
      decision 'yes' -> consent recorded (decision, decided_at, decision_notice = privacy notice version); the page then
                        opens the application form
      decision 'no'  -> the nominee's details are deleted at once (their cells in Nominees and their card in the
-                       nomination's answers_json), and the address goes to tab Unsubscribed, so nobody writes to them again.
+                       nomination's answers_json), and the address goes to tab Unsubscribed with source nominee-declined,
+                       so nobody writes to them again. A plain unsubscribe stops emails only and deletes nothing.
    A nominee who does nothing is deleted 30 days after the nomination by the mailer (Code.gs), not here. */
 const NOM_TAB = 'Nominees', NOM_COLS = ['decision', 'decided_at', 'decision_notice'], NOM_WIPE = ['name', 'contact', 'affiliation', 'why'];
 const NOM_ID_RE = /^(V4N-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4})\.([1-9])$/, NOTICE_RE = /^privacy-v[0-9]{1,3}$/;
@@ -153,15 +169,6 @@ async function decline(g, head, row, rec) {
     if (c) { Object.assign(c, { name: '', contact: '', affiliation: '', why: '' }); await g.call('/values/' + encodeURIComponent(q('Nominations') + '!' + colName(col + 1) + (j + 2)) + '?valueInputOption=RAW', { method: 'PUT', body: JSON.stringify({ values: [[JSON.stringify(a)]] }) }); }
   }
   if (EMAIL_RE.test(email)) await recordUnsub(g, email, 'nominee-declined');
-}
-
-async function declineByEmail(g, email) {
-  let { head, rows } = await readTab(g, NOM_TAB);
-  const c = head.indexOf('contact'), d = head.indexOf('decision');
-  const hit = rows.map((r, i) => i).filter(i => String(rows[i][c] || '').trim().toLowerCase() === email && rows[i][d] !== 'declined');
-  if (!hit.length) return;
-  head = await g.addColumns(NOM_TAB, head, NOM_COLS);
-  for (const i of hit) await decline(g, head, i + 2, Object.fromEntries(head.map((h, k) => [h, rows[i][k] === undefined ? '' : rows[i][k]])));
 }
 
 async function readTab(g, tab) {
@@ -260,7 +267,8 @@ async function save(g, req) {
 }
 
 /* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
-   whether they declined (decision 'declined' or the address in Unsubscribed). Declined cards are wiped in place, so their
+   whether they declined (decision 'declined', or the address in Unsubscribed with source nominee-declined, which only a
+   "no" on the nomination page writes). Declined cards are wiped in place, so their
    details reach neither answers_json nor Nominees again. */
 const NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
 async function nomineePlan(g, nominationId, cards) {
@@ -268,12 +276,12 @@ async function nomineePlan(g, nominationId, cards) {
   const j = await g.call('/values/' + encodeURIComponent(q(NOM_TAB) + '!A:ZZ') + '?valueRenderOption=FORMATTED_VALUE');
   const v = j.values || [], head = (v[0] || []).map(String);
   const mine = v.slice(1).filter(r => nominationId && String(r[0]) === nominationId).map(r => Object.fromEntries(head.map((h, k) => [h, r[k] === undefined ? '' : r[k]])));
-  let unsub = new Set();
-  try { unsub = new Set((await g.column(UNSUB_TAB)).slice(1).map(x => x.trim().toLowerCase())); } catch (e) { /* no tab yet: nobody unsubscribed */ }
+  let declinedAddr = new Set(); /* only a "no" on the nomination page counts; a plain unsubscribe stops emails and keeps details */
+  try { declinedAddr = new Set((await readTab(g, UNSUB_TAB)).rows.filter(r => String(r[2]) === 'nominee-declined').map(r => String(r[0]).trim().toLowerCase())); } catch (e) { /* no tab yet */ }
   return cards.map(c => {
     const email = String(c.contact || '').trim().toLowerCase();
     const old = email ? mine.find(r => String(r.contact).trim().toLowerCase() === email) || null : null;
-    const declined = !!email && unsub.has(email);
+    const declined = !!email && (declinedAddr.has(email) || (!!old && old.decision === 'declined'));
     if (declined) Object.assign(c, { name: '', contact: '', affiliation: '', why: '' });
     return { head, old, declined };
   });
