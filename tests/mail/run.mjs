@@ -125,6 +125,8 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's', RESEND_API_KEY: 'k' }, { resend: 429 });
   u.run();
   check('fail: Resend 429 stops the run after one try', u.sent.length === 1, u.sent.length);
+  u.run(); u.run(); u.run();
+  check('fail: Resend 429 (daily limit) is deferred, never marked failed', rows(u.book, 'Applications').every(r => !/^failed/.test(r.confirm_sent_at)) && rows(u.book, 'Email log').every(r => r.status === 'deferred'), rows(u.book, 'Email log').map(r => r.status));
 }
 
 /* 5. late resume after go-live, unsubscribed, safety switches */
