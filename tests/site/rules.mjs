@@ -18,7 +18,7 @@ export const PRICE_RE = /(\d[\d .,]*\s?(€|(EUR|Kč|CZK)\b)|(€|EUR|CZK)\s?\d)
 export const PARTNERS = {
   'Charles University': /Charles University|Univerzita Karlova/,
   'Czech Technical University in Prague': /Czech Technical University/,
-  'Comenius University Bratislava': /Comenius/,
+  'Comenius University Bratislava': /Comenius|[Pp]artner university in Slovakia/,   // name withheld on the site since 18 Nov 2026
   'University of Wrocław': /Wroc[łl]aw/,
   'Nicolaus Copernicus University in Toruń': /Toru[ńn]|Copernicus/,
   'Eötvös Loránd University': /E[öo]tv[öo]s|ELTE/
