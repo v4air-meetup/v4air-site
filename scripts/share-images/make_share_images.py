@@ -28,8 +28,9 @@ CODE = re.compile(r'^[a-z0-9]{4}-[a-z0-9]{4}$')
 
 # White QR box in each base image, measured once (left, top, right, bottom in pixels).
 TEMPLATES = {
-    '': {'file': 'portrait.jpg', 'box': (1118, 1307, 1266, 1454), 'medium': 'share', 'campaign': 'email3'},
-    '-banner': {'file': 'banner.jpg', 'box': (2296, 747, 2452, 903), 'medium': 'forward', 'campaign': 'email6'},
+    # scale: output size relative to the base image (the portrait is upscaled so its QR code stays sharp when enlarged)
+    '': {'file': 'portrait.jpg', 'box': (1118, 1307, 1266, 1454), 'medium': 'share', 'campaign': 'email3', 'scale': 2},
+    '-banner': {'file': 'banner.jpg', 'box': (2296, 747, 2452, 903), 'medium': 'forward', 'campaign': 'email6', 'scale': 1},
 }
 CORNER = 6  # keep the box's rounded corners: clear only inside this inset
 
@@ -50,9 +51,13 @@ def qr_matrix(data):
 
 def render(code, out_dir):
     for suffix, t in TEMPLATES.items():
+        k = t['scale']
         base = Image.open(HERE / 'base' / t['file']).convert('RGB')
-        l, top, r, b = t['box']
-        base.paste((255, 255, 255), (l + CORNER, top + CORNER, r - CORNER, b - CORNER))  # clear the old code
+        if k != 1:
+            base = base.resize((base.width * k, base.height * k), Image.LANCZOS)
+        l, top, r, b = (v * k for v in t['box'])
+        c = CORNER * k
+        base.paste((255, 255, 255), (l + c, top + c, r - c, b - c))  # clear the old code
         m = qr_matrix(link(code, t['medium'], t['campaign']))
         n = len(m)
         # whole pixels per module, leaving at least 2 modules of white quiet zone inside the box
