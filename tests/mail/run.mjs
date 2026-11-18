@@ -23,7 +23,7 @@ function prague(d, pattern) {
 const DOC = JSON.parse(readFileSync(new URL('./fixtures/emails-doc.json', import.meta.url)));
 const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Error('no access'); const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => ({ getText: () => t.text }) }), getChildTabs: () => t.children.map(wrap) }); return { getTabs: () => tabs.map(wrap), getName: () => 'emails' }; } });
 
-function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false } = {}) {
+function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [] } = {}) {
   const book = new Book();
   book.seed('Applications', HEAD, [
     ['V4A-OLD1-AAAA', 'h1', 'submitted', ago(31), ago(30), ago(30), '', '{}', 'Olga', 'old@uni.cz'],
@@ -48,7 +48,10 @@ function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false }
       formatDate: (d, tz, pattern) => prague(d, pattern)
     },
     DocumentApp: docApp(doc, brokenDoc),
-    DriveApp: { getRootFolder: () => ({ getFilesByName: () => ({ hasNext: () => false }) }) },
+    DriveApp: {
+      getRootFolder: () => ({ getFilesByName: () => ({ hasNext: () => false }) }),
+      getFolderById: id => { if (id !== 'petr-folder') throw new Error('no folder'); let i = 0; return { getFilesByName: () => ({ hasNext: () => i < folderFiles.length, next: () => folderFiles[i++] }) }; }
+    },
     MailApp: { getRemainingDailyQuota: () => 100 },
     GmailApp: { sendEmail: (to, subject, body) => sent.push({ via: 'gmail', to: to.split(','), subject, body }) },
     UrlFetchApp: {
@@ -143,6 +146,16 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's' }, { brokenDoc: true });
   u.run();
   check('doc: unreadable Doc sends nothing', u.sent.length === 0, u.sent.length);
+}
+/* 7. Petr's settings folder: read once per change, never trashed */
+{
+  const file = { getId: () => 'f1', getLastUpdated: () => new Date(1000), getBlob: () => ({ getDataAsString: () => JSON.stringify({ RESEND_API_KEY: 'from-petr', MAIL_MODE: 'redirect', NOT_ALLOWED: 'x' }) }), setTrashed() { throw new Error('not the owner'); } };
+  const t = setup({ SETTINGS_FOLDER_ID: 'petr-folder' }, { folderFiles: [file] });
+  t.run();
+  check('settings folder: allowed keys imported, others ignored', t.prop('RESEND_API_KEY') === 'from-petr' && t.prop('MAIL_MODE') === 'redirect' && t.prop('NOT_ALLOWED') === null, [t.prop('RESEND_API_KEY'), t.prop('MAIL_MODE')]);
+  const u = setup({ SETTINGS_FOLDER_ID: 'petr-folder', SETTINGS_SEEN: 'f1 1000', MAIL_MODE: 'dry' }, { folderFiles: [file] });
+  u.run();
+  check('settings folder: an unchanged file is not imported again', u.prop('MAIL_MODE') === 'dry', u.prop('MAIL_MODE'));
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);

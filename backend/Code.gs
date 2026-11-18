@@ -297,11 +297,14 @@ function hash(s) {
    script property RESEND_API_KEY is set: from RESEND_FROM (default info@v4air.eu), DKIM-signed for v4air.eu. Free plan: 100 a day. */
 var MAIL_FROM = 'peter@v4air.eu', MAIL_NAME = 'V4 AI Researchers Meetup', MAIL_REPLY = 'info@v4air.eu';
 var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
-/* Secrets and mail settings reach the script without the editor: a JSON file with this name in petkout1's My Drive, e.g.
-   {"RESEND_API_KEY": "re_...", "UNSUB_SECRET": "...", "MAIL_MODE": "redirect"}, is read into script properties on the next run
-   and trashed. Only the keys listed here are accepted. */
+/* Secrets and mail settings reach the script without the editor: a JSON file with this name, e.g.
+   {"RESEND_API_KEY": "re_...", "UNSUB_SECRET": "...", "MAIL_MODE": "redirect"}, is read into script properties on the next run.
+   Two places are read: petkout1's My Drive root (the file is then trashed), and the folder in script property
+   SETTINGS_FOLDER_ID, Petr's own folder shared with petkout1, so Petr can change the mail settings himself (that file
+   is read once per change, as petkout1 cannot trash it; Petr deletes it after the import). Only files in these two places
+   count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
-var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START', 'EMAILS_DOC_ID'];
+var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START', 'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, RESUME_AFTER_MS = 24 * HOUR, LATE_MS = 3 * 24 * HOUR, MAX_TRIES = 3;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: no application reminders after it */
@@ -593,13 +596,24 @@ function unsubscribeLink(email) {
 }
 
 function importSecrets(props) {
-  var files = DriveApp.getRootFolder().getFilesByName(SECRETS_FILE);
-  while (files.hasNext()) {
-    var f = files.next(), data;
-    try { data = JSON.parse(f.getBlob().getDataAsString()); } catch (e) { console.error(SECRETS_FILE + ' is not valid JSON'); data = {}; }
+  var take = function (f, where) {
+    var data;
+    try { data = JSON.parse(f.getBlob().getDataAsString()); } catch (e) { console.error(SECRETS_FILE + ' in ' + where + ' is not valid JSON'); data = {}; }
     var got = SECRET_KEYS.filter(function (k) { return typeof data[k] === 'string'; });
     got.forEach(function (k) { if (data[k]) props.setProperty(k, data[k]); else props.deleteProperty(k); });
-    console.log('settings imported: ' + (got.join(', ') || 'none'));
-    f.setTrashed(true);
+    console.log('settings imported from ' + where + ': ' + (got.join(', ') || 'none'));
+  };
+  var files = DriveApp.getRootFolder().getFilesByName(SECRETS_FILE);
+  while (files.hasNext()) { var f = files.next(); take(f, 'My Drive'); f.setTrashed(true); }
+  var folder = props.getProperty('SETTINGS_FOLDER_ID');
+  if (!folder) return;
+  try {
+    files = DriveApp.getFolderById(folder).getFilesByName(SECRETS_FILE);
+  } catch (e) { console.error('SETTINGS_FOLDER_ID: ' + e); return; }
+  while (files.hasNext()) {
+    var g = files.next(), stamp = g.getId() + ' ' + g.getLastUpdated().getTime();
+    if (props.getProperty('SETTINGS_SEEN') === stamp) continue;
+    take(g, 'the settings folder');
+    props.setProperty('SETTINGS_SEEN', stamp);
   }
 }
