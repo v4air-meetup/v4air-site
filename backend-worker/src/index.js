@@ -239,6 +239,10 @@ async function save(g, req) {
   }
   set.last_saved_at = now;
   set.screen = typeof req.answers.__screen === 'number' ? req.answers.__screen : '';
+  /* a nomination sent again: nominees who declined or unsubscribed are wiped before anything is written, and the others
+     keep what the sheet already knows about them (decision, mailer columns, saved_at); see nomineePlan */
+  let plan = null;
+  if (req.form === 'B' && (req.final || old.status === 'submitted')) plan = await nomineePlan(g, row ? id : '', answers.json.__cards || []);
   set.answers_json = JSON.stringify(answers.json);
   if (typeof req.ga_cid === 'string' && /^[0-9.]{1,40}$/.test(req.ga_cid)) set.ga_client_id = "'" + req.ga_cid; /* text, or Sheets rounds it as a number */
   if (req.final) { set.status = 'submitted'; if (!old.submitted_at) set.submitted_at = now; }
@@ -248,23 +252,53 @@ async function save(g, req) {
   const values = head.map(h => (h in set ? set[h] : null)); /* null = leave the cell untouched */
   if (created) row = await g.appendRow(f.tab, values.map(v => (v === null ? '' : v)));
   else await g.writeRow(f.tab, row, values);
-  if (req.form === 'B' && req.final) await writeNominees(g, id, answers.json, now);
+  if (req.form === 'B' && req.final) await writeNominees(g, id, answers.json, now, plan);
 
   const out = { ok: true, id, token, created };
   if ('__file' in answers.json) out.file = answers.json.__file;
   return out;
 }
 
-async function writeNominees(g, nominationId, j, now) {
-  const tab = 'Nominees';
+/* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
+   whether they declined (decision 'declined' or the address in Unsubscribed). Declined cards are wiped in place, so their
+   details reach neither answers_json nor Nominees again. */
+const NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
+async function nomineePlan(g, nominationId, cards) {
+  if (!cards.length) return [];
+  const j = await g.call('/values/' + encodeURIComponent(q(NOM_TAB) + '!A:ZZ') + '?valueRenderOption=FORMATTED_VALUE');
+  const v = j.values || [], head = (v[0] || []).map(String);
+  const mine = v.slice(1).filter(r => nominationId && String(r[0]) === nominationId).map(r => Object.fromEntries(head.map((h, k) => [h, r[k] === undefined ? '' : r[k]])));
+  let unsub = new Set();
+  try { unsub = new Set((await g.column(UNSUB_TAB)).slice(1).map(x => x.trim().toLowerCase())); } catch (e) { /* no tab yet: nobody unsubscribed */ }
+  return cards.map(c => {
+    const email = String(c.contact || '').trim().toLowerCase();
+    const old = email ? mine.find(r => String(r.contact).trim().toLowerCase() === email) || null : null;
+    const declined = !!email && unsub.has(email);
+    if (declined) Object.assign(c, { name: '', contact: '', affiliation: '', why: '' });
+    return { head, old, declined };
+  });
+}
+
+async function writeNominees(g, nominationId, j, now, plan) {
+  const tab = NOM_TAB;
   const ids = await g.column(tab);
   const del = [];
   ids.forEach((v, i) => { if (i > 0 && v === nominationId) del.push(i); }); /* resubmission replaces this nomination's rows */
   if (del.length) await g.deleteRows(tab, del);
-  const rows = (j.__cards || []).map((c, i) =>
-    [nominationId, j['B.application_id'] || '', j['B.name'] || '', j['B.email'] || '', i + 1, c.type, c.name, c.contact, c.affiliation, c.why]
-      .map(v => (typeof v === 'string' ? cellText(v) : v)).concat([now]));
-  if (rows.length) await g.append(tab, rows);
+  const cards = j.__cards || [];
+  if (!cards.length) return;
+  let head = plan && plan[0] ? plan[0].head : (await readTab(g, tab)).head;
+  if (plan && plan.some(p => p.declined)) head = await g.addColumns(tab, head, NOM_COLS);
+  const rows = cards.map((c, i) => {
+    const p = (plan || [])[i] || {}, rec = {};
+    if (p.old) head.forEach(h => { if (!NOM_DATA.includes(h)) rec[h] = p.old[h]; }); /* decision, *_sent_at, saved_at ... as they were */
+    Object.assign(rec, { nomination_id: nominationId, application_id: j['B.application_id'] || '', nominator_name: j['B.name'] || '', nominator_email: j['B.email'] || '',
+      n: i + 1, type: c.type, name: c.name, contact: c.contact, affiliation: c.affiliation, why: c.why });
+    if (!rec.saved_at) rec.saved_at = now;
+    if (p.declined) Object.assign(rec, { decision: 'declined', decided_at: rec.decided_at || now });
+    return head.map(h => { const x = rec[h]; return x === undefined || x === null ? '' : NOM_DATA.includes(h) && typeof x === 'string' ? cellText(x) : x; });
+  });
+  await g.append(tab, rows);
 }
 
 /* ---------- input hygiene (same rules as Code.gs clean) ---------- */

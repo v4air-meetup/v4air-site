@@ -3,7 +3,8 @@
    Checks: a bad or foreign token is refused; "yes" needs the privacy notice and records consent; "no" wipes the nominee
    in Nominees and in the nomination's answers_json and adds the address to Unsubscribed; unsubscribing a nominee's address
    does the same; a wiped nominee reads as declined; an unknown nominee reads as gone; the page sends Yes only after the tick
-   and then opens the application form.
+   and then opens the application form; a nomination sent again keeps decisions and mailer columns and wipes declined
+   nominees, and a new nomination of someone who declined is wiped at once.
    Run: cd tests && npm run nominee   (CHROME=path uses a local Chrome) */
 import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -68,6 +69,32 @@ check('unsubscribing a nominee wipes them like a no', r.ok && nominee(3).decisio
 r = await post({ action: 'nomination', id: `${NID}.4`, t: tok(`nomination:${NID}.4`) });
 check('an unknown nominee reads as gone', r.ok && r.state === 'gone', r);
 check('other columns of the nominee rows are unchanged', nominee(2).nominator_name === 'Alice Nominator' && nominee(2).saved_at === 46340 && nominee(1).affiliation === 'Uni 1');
+
+/* ---------- a nomination sent again keeps decisions and wipes declined nominees ---------- */
+const B = (cards, who) => ({ 'B.name': who || 'Bob Nominator', 'B.email': (who ? 'carol' : 'bob') + '@example.org', 'B.consent': true, 'B.notice_version': 'privacy-v2', __cards: cards });
+const rc = ['r1', 'r2', 'r3'].map((x, i) => ({ type: 'student', name: `Person ${x}`, contact: `${x}@example.org`, affiliation: `Inst ${i + 1}`, why: `Because ${x}` }));
+const first = await post({ action: 'save', form: 'B', final: true, answers: B(rc.map(c => ({ ...c }))) });
+const BID = first.id, rows = () => tab('Nominees').filter(r => r.nomination_id === BID);
+const L = n => ({ id: `${BID}.${n}`, t: tok(`nomination:${BID}.${n}`) });
+check('a new nomination writes one row per nominee', first.ok && rows().length === 3, rows());
+await post({ action: 'nomination', ...L(1), decision: 'yes', notice: 'privacy-v2' });
+await post({ action: 'nomination', ...L(2), decision: 'no' });
+{ /* the mailer's own column on the Nominees tab, as Code.gs adds it */
+  const nt = book.tab('Nominees'), c = nt.rows[0].length; nt.rows[0].push('invite_sent_at'); nt.cols = Math.max(nt.cols, c + 1);
+  nt.rows.forEach((r, i) => { if (i && r[0] === BID && String(r[4]) === '1') { while (r.length < c) r.push(''); r[c] = 46345; } });
+}
+const saved1 = rows().find(r => String(r.n) === '3').saved_at;
+const again = await post({ action: 'save', form: 'B', final: true, id: BID, token: first.token, answers: B(rc.map(c => ({ ...c }))) });
+const [a1, a2, a3] = [1, 2, 3].map(n => rows().find(r => String(r.n) === String(n)));
+check('sent again: same nomination, still one row per nominee', again.ok && again.id === BID && !again.created && rows().length === 3, [again, rows().length]);
+check('sent again: the accepted nominee keeps the decision, notice and the mailer column', a1.decision === 'accepted' && a1.decision_notice === 'privacy-v2' && a1.invite_sent_at === 46345 && a1.name === 'Person r1', a1);
+check('sent again: the declined nominee stays wiped and declined', a2.decision === 'declined' && !a2.name && !a2.contact && !a2.why, a2);
+const cardsNow = JSON.parse(tab('Nominations').find(r => r.response_id === BID).answers_json).__cards;
+check('sent again: the declined card is wiped in answers_json, the others kept', !cardsNow[1].name && !cardsNow[1].contact && cardsNow[0].name === 'Person r1' && cardsNow[2].name === 'Person r3', cardsNow);
+check('sent again: an undecided nominee keeps their first saved_at', a3.saved_at === saved1 && a3.name === 'Person r3' && !a3.decision, a3);
+const other = await post({ action: 'save', form: 'B', final: true, answers: B([{ ...rc[1] }], 'Carol') });
+const o1 = tab('Nominees').find(r => r.nomination_id === other.id);
+check('a new nomination of someone who declined is wiped at once', o1 && o1.decision === 'declined' && !o1.name && !o1.contact, o1);
 
 /* ---------- page in Chrome ---------- */
 book.seed('Nominees', book.tab('Nominees').rows[0], nomineeRows.slice(0, 1).map(r => r.slice())); /* a fresh, undecided nominee 1 */

@@ -78,7 +78,8 @@ function writeRange(book, a1, values, raw) {
     vals.forEach((v, j) => {
       const c = g.c1 + j; if (c > t.cols) throw new Error(`exceeds grid limits: column ${c} > ${t.cols} in ${g.title}`);
       while (row.length < c) row.push('');
-      row[c - 1] = raw ? (v === null || v === undefined ? '' : v) : entered(v);
+      if (v === null) return; /* the API skips null: the cell keeps its value (the Worker's partial row writes rely on it) */
+      row[c - 1] = raw ? (v === undefined ? '' : v) : entered(v);
     });
   });
 }
