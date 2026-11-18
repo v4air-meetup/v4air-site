@@ -64,7 +64,7 @@ function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, 
   }));
   vm.runInContext(readFileSync(path.join(ROOT, 'backend/Code.gs'), 'utf8'), ctx);
   const live = ctx.PropertiesService.getScriptProperties();
-  return { book, sent, run: () => ctx.sendMail(), prop: k => live.getProperty(k) };
+  return { book, sent, ctx, run: () => ctx.sendMail(), prop: k => live.getProperty(k) };
 }
 const rows = (book, tab) => book.table(tab).rows;
 const by = (rs, id) => rs.filter(r => r.response_id === id);
@@ -206,7 +206,7 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   n = t.sent.length; day(29); day(30);
   check('nothing more after the chains end', t.sent.length === n, since(n));
   day(31);
-  const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards;
+  const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards || [];
   check('day 31: nominee details deleted, accepted keeps its decision, the applicant\'s nominee row stays', !nom[0].name && !nom[0].contact && nom[0].decision === 'accepted' && !nom[1].contact && nom[1].decision === 'expired' && nom[2].contact === 'applied@uni.cz' && !card[0].contact && !card[1].contact && card[2].contact === 'applied@uni.cz', nom.map(r => [r.name, r.contact, r.decision]));
   check('every email went at most once per form, kind and address', new Set(rows(t.book, 'Email log').map(r => r.form + r.kind + r.to)).size === rows(t.book, 'Email log').length, rows(t.book, 'Email log').map(r => r.kind + ' ' + r.to));
 }
@@ -245,6 +245,30 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   t.run();
   const p = rows(t.book, 'Mail preview').filter(r => r.would_send === 'delete details');
   check('dry: the 30-day deletion is previewed, nothing deleted', p.length === 1 && rows(t.book, 'Nominees')[0].contact === 'old-nominee@uni.cz', p);
+}
+/* 11. a nomination sent again through Apps Script: declined nominees stay wiped, the others keep their columns */
+{
+  const T0 = Date.UTC(2026, 10, 20, 9, 0), at = d => serial(new Date(T0 + d * DAY));
+  const BHEAD = ['response_id', 'token_hash', 'status', 'started_at', 'last_saved_at', 'submitted_at', 'screen', 'answers_json', 'B.name', 'B.email'];
+  const NHEAD = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why', 'saved_at', 'decision', 'invite_sent_at'];
+  let ctxRef;
+  const seed = book => {
+    book.seed('Applications', HEAD, []); book.seed('Speakers', HEAD, []);
+    book.seed('Nominations', BHEAD, [['V4N-RESB-CCCC', 'PLACEHOLDER', 'submitted', at(-5), at(-5), at(-5), '', '{}', 'Ana', 'app@uni.cz']]);
+    book.seed('Nominees', NHEAD, [
+      ['V4N-RESB-CCCC', '', 'Ana', 'app@uni.cz', 1, 'researcher', 'Dee', '', '', '', at(-5), 'declined', at(-5)],
+      ['V4N-RESB-CCCC', '', 'Ana', 'app@uni.cz', 2, 'researcher', 'Nick', 'nick@uni.cz', 'X', 'good', at(-5), 'accepted', at(-5)]
+    ]);
+  };
+  const t = setup({}, { seed, unsub: ['dee@uni.cz'] });
+  t.book.tab('Nominations').rows[1][1] = t.ctx.hash('tok-1');
+  const r = t.ctx.save({ form: 'B', id: 'V4N-RESB-CCCC', token: 'tok-1', final: true, answers: { 'B.name': 'Ana', 'B.email': 'app@uni.cz',
+    __cards: [{ type: 'researcher', name: 'Nick', contact: 'nick@uni.cz', affiliation: 'X', why: 'good' }, { type: 'researcher', name: 'Dee', contact: 'dee@uni.cz', affiliation: 'Q', why: 'w' }] } });
+  const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards || [];
+  const nick = nom.find(x => x.contact === 'nick@uni.cz'), dee = nom.find(x => x.n === 2);
+  check('resubmitted nomination: saved', r.ok === true, r);
+  check('resubmitted nomination: the accepted nominee keeps decision, sent mark and 30-day clock', !!nick && nick.decision === 'accepted' && nick.invite_sent_at !== '' && Math.abs(nick.saved_at - at(-5)) < 1e-6, nick);
+  check('resubmitted nomination: the declined nominee comes back wiped, in Nominees and answers_json', !!dee && !dee.name && !dee.contact && dee.decision === 'declined' && !card[1].contact && !card[1].name, [dee, card[1]]);
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);

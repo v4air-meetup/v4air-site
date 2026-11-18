@@ -109,6 +109,9 @@ function save(req) {
     }
     rec.last_saved_at = now;
     rec.screen = typeof req.answers.__screen === 'number' ? req.answers.__screen : '';
+    /* a nomination sent again: nominees who declined or unsubscribed are wiped before anything is written, and the others
+       keep what the sheet already knows about them (decision, mailer columns, saved_at); the Worker does the same (nomineePlan) */
+    var plan = req.form === 'B' && (req.final || rec.status === 'submitted') ? nomineePlan(created ? '' : id, answers.json.__cards || []) : null;
     rec.answers_json = JSON.stringify(answers.json);
     /* GA4 client id (the _ga cookie value); joins a row to its traffic source in GA */
     if (typeof req.ga_cid === 'string' && /^[0-9.]{1,40}$/.test(req.ga_cid)) rec.ga_client_id = req.ga_cid;
@@ -124,7 +127,7 @@ function save(req) {
     head = addColumns(sh, head, Object.keys(rec));
     /* the whole row is rewritten, so text read from the sheet needs the same protection as new answers */
     sh.getRange(row, 1, 1, head.length).setValues([head.map(function (h) { return !(h in rec) ? '' : typeof rec[h] === 'string' ? cellText(rec[h]) : rec[h]; })]);
-    if (req.form === 'B' && req.final) writeNominees(id, answers.json, now);
+    if (req.form === 'B' && req.final) writeNominees(id, answers.json, now, plan);
     SpreadsheetApp.flush();
   } finally {
     lock.releaseLock();
@@ -230,7 +233,34 @@ function uniqueId(sh, prefix) {
   throw new Error('could not generate a unique id');
 }
 
-function writeNominees(nominationId, json, now) {
+/* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
+   whether they declined (address in Unsubscribed). Declined cards are wiped in place, so their details reach neither
+   answers_json nor Nominees again. Same as the Worker's nomineePlan (backend-worker/src/index.js). */
+var NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
+function nomineePlan(nominationId, cards) {
+  if (!cards.length) return [];
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Nominees'), head = sh ? header(sh) : [], mine = [];
+  if (sh && nominationId && sh.getLastRow() >= 2) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, head.length).getValues().forEach(function (r) {
+      if (String(r[0]) !== nominationId) return;
+      var o = {};
+      head.forEach(function (h, k) { o[h] = r[k]; });
+      mine.push(o);
+    });
+  }
+  var unsub = unsubscribed();
+  return cards.map(function (c) {
+    var email = lower(c.contact), old = null;
+    for (var i = 0; email && i < mine.length && !old; i++) if (lower(mine[i].contact) === email) old = mine[i];
+    var declined = !!email && !!unsub[email];
+    if (declined) { c.name = ''; c.contact = ''; c.affiliation = ''; c.why = ''; }
+    return { old: old, declined: declined };
+  });
+}
+
+/* Rewrites a nomination's Nominees rows. Columns outside NOM_DATA (decision, decided_at, decision_notice, the mailer's
+   *_sent_at, saved_at) are carried over from the nominee's old row, so consent, sent emails and the 30-day clock survive. */
+function writeNominees(nominationId, json, now, plan) {
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Nominees');
   var last = sh.getLastRow();
   /* resubmission replaces this nomination's rows */
@@ -238,11 +268,21 @@ function writeNominees(nominationId, json, now) {
     var ids = sh.getRange(2, 1, last - 1, 1).getValues();
     for (var r = ids.length - 1; r >= 0; r--) if (ids[r][0] === nominationId) sh.deleteRow(r + 2);
   }
-  var rows = (json.__cards || []).map(function (c, i) {
-    return [nominationId, json['B.application_id'] || '', json['B.name'] || '', json['B.email'] || '', i + 1, c.type, c.name, c.contact, c.affiliation, c.why]
-      .map(function (v) { return typeof v === 'string' ? cellText(v) : v; }).concat([now]);
+  var cards = json.__cards || [];
+  if (!cards.length) return;
+  var head = header(sh);
+  if ((plan || []).some(function (p) { return p.declined; })) head = addColumns(sh, head, ['decision', 'decided_at', 'decision_notice']);
+  var rows = cards.map(function (c, i) {
+    var p = (plan || [])[i] || {}, rec = {};
+    if (p.old) head.forEach(function (h) { if (NOM_DATA.indexOf(h) === -1 && h in p.old) rec[h] = p.old[h]; });
+    rec.nomination_id = nominationId; rec.application_id = json['B.application_id'] || ''; rec.nominator_name = json['B.name'] || '';
+    rec.nominator_email = json['B.email'] || ''; rec.n = i + 1; rec.type = c.type; rec.name = c.name; rec.contact = c.contact;
+    rec.affiliation = c.affiliation; rec.why = c.why;
+    if (!rec.saved_at) rec.saved_at = now;
+    if (p.declined) { rec.decision = 'declined'; rec.decided_at = rec.decided_at || now; }
+    return head.map(function (h) { var x = rec[h]; return x === undefined || x === null ? '' : NOM_DATA.indexOf(h) !== -1 && typeof x === 'string' ? cellText(x) : x; });
   });
-  if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, NOMINEE_COLS.length).setValues(rows);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, head.length).setValues(rows);
 }
 
 /* ---------- input hygiene ---------- */
