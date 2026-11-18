@@ -11,23 +11,38 @@ Reference for people and agents. The mailer is `sendMail` in `backend/Code.gs`; 
 | One email | One tab. Tab name = email name, exactly (table below). Child tabs are read too. |
 | Tab text | Optional lines first (e.g. the "Sent:" rule, ignored). Then one line `Subject: <subject>`. Everything after it is the body, as plain text. |
 | Ignored tabs | Any tab without a `Subject:` line (e.g. "How it works"). |
-| Placeholders | Single braces, filled per person: `{NAME}` `{ID}` `{LINK}` `{NOMINATE_LINK}` `{UNSUBSCRIBE_LINK}` `{SENT_DATE}` `{STARTED_DATE}`. Any other `{WORD}` blocks that email. |
-| Required | Body has `{LINK}` and `{UNSUBSCRIBE_LINK}`. Subject not empty. |
+| Placeholders | Single braces, filled per person: `{NAME}` `{ID}` `{LINK}` `{NOMINATE_LINK}` `{UNSUBSCRIBE_LINK}` `{SENT_DATE}` `{STARTED_DATE}` `{NOMINATOR}` `{ACCEPT_LINK}`. Any other `{WORD}` blocks that email. |
+| `{LINK}` | Applications and speakers: the personal link to their form. Nomination confirmation and nominate reminders: the nominate page. Nominee emails: the apply page. |
+| Required | Body has `{UNSUBSCRIBE_LINK}` and `{LINK}` (nominee emails: `{ACCEPT_LINK}` instead). Subject not empty. |
 | Broken text | That email is not sent; tab "Mail preview" (dry run) shows why. Doc unreadable: nothing is sent. |
 | Late variant | Tab "<name> (late)", optional. Used when the email goes out more than 3 days after the form was sent or last saved. |
 
-Tab names the mailer uses today:
+Tab names the mailer uses, in priority order (one email per person per day: the first one due goes). `kind` is the value for `MAIL_KINDS`.
 
-| Tab | Sent to |
-|---|---|
-| Application confirmation | applicant, after sending the form |
-| Application confirmation (late) | same, sent late (backlog) |
-| Application resume | applicant with an unfinished form, 24 h after the last save |
-| Application resume (late) | same, sent late (backlog) |
-| Speaker confirmation | invited speaker, after sending the form |
-| Speaker resume | invited speaker with an unfinished form, 24 h after the last save |
+| Tab | Kind | Sent to | When |
+|---|---|---|---|
+| Application confirmation (+ late) | confirm | applicant | form sent |
+| Speaker confirmation | confirm | invited speaker | form sent |
+| Nomination confirmation | confirm | the nominator | nomination sent |
+| Deadline reminder: 1 week | deadline1 | applicant with an unfinished form | 8 Jan 2027 from 09:00 |
+| Deadline reminder: last day | deadline2 | same | 14 Jan 2027 from 09:00 |
+| Application resume (+ late) | resume | same | 1 day after the last save |
+| Application resume 2 | resume2 | same | 7 days after the last save, after resume; not from 5 Jan 2027 |
+| Speaker resume | resume | speaker with an unfinished form | 1 day after the last save |
+| Speaker resume 2 | resume2 | same | 4 days after the last save, after resume |
+| Speaker resume 3 | resume3 | same | 10 days after the last save, after resume 2 |
+| Nominee invitation | invite | nominee with an email address, not declined, not applied | right after the nomination |
+| Nominee reminder | remind | same | 7 days after the invitation |
+| Nominate reminder 1 | nominate1 | applicant who nominated nobody | 3 days after applying, after the confirmation |
+| Nominate reminder 2 | nominate2 | same | 14 days after applying |
+| Nominate reminder 3 | nominate3 | same | 28 days after applying |
 
-The other tabs of "V4AIR form emails" (reminders, nominations) are not sent yet.
+For every email: not to unsubscribed addresses (confirmations excepted) or test addresses; nothing but confirmations after
+15 January 2027; each reminder once per address; rows saved before go-live count as saved at go-live. Nominee details are
+deleted after 30 days by the daily check (`purgeNominees`), in live mode or with `NOMINEE_PURGE=true`.
+
+Reading every email before go-live: `python3 tests/mail/fixture-from-doc.py`, then `node tests/mail/samples.mjs --out samples.txt`
+(all 17 with made-up data), or `--send <address>` to receive them through Resend.
 
 ## Typecase output for this Doc
 
