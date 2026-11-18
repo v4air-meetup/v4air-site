@@ -61,7 +61,7 @@ Reading every email before go-live: `python3 tests/mail/fixture-from-doc.py`, th
 |---|---|
 | Output format | `gdoc_tabs` (one Doc, one tab per document) |
 | Document path rule | The exact tab name from the table above. No `/` (Typecase turns it into " · "), at most 50 characters. |
-| Google | "Write into this Doc" = the Doc "V4AIR form emails"; "Look like this Doc" = the same Doc. Typecase rewrites the tab of each email and leaves other tabs alone. Project "V4AIR form emails", built by v4air `drafts/copy-system/form-emails/make_project.py`. |
+| Google | Output named exactly "V4AIR form emails", top folder COPY, "If a document is already there" = Overwrite: the export finds the Doc of that name in the folder, rewrites the tab of each email and leaves other tabs alone. "Look like this Doc" = the same Doc. Project "V4AIR form emails", built by v4air `drafts/copy-system/form-emails/make_project.py`. |
 | Text | First line `Subject: ...`, then a blank line, then the body. |
 | Placeholders | Write the mailer's placeholders with single braces (`{NAME}`). Typecase only fills `{{fact}}`; single braces pass through unchanged. Never `{{NAME}}`. |
 | Approval gate | `approved`: the export writes only reviewed text, and the export is what goes to applicants. |
