@@ -19,7 +19,9 @@ import { createHmac } from 'node:crypto';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
 const args = process.argv.slice(2), opt = k => { const i = args.indexOf(k); return i < 0 ? null : args[i + 1]; };
 const DOC = JSON.parse(readFileSync(new URL('./fixtures/emails-doc.json', import.meta.url)));
-const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => ({ getText: () => t.text }) }), getChildTabs: () => t.children.map(wrap) });
+/* a tab body the way Apps Script hands it out: one child per paragraph (the Docs API text has one paragraph per line) */
+const body = text => { const ps = String(text).split('\n'); if (ps[ps.length - 1] === '') ps.pop(); return { getNumChildren: () => ps.length, getChild: i => ({ getType: () => 'PARAGRAPH', asText: () => ({ getText: () => ps[i] }) }) }; };
+const wrap = t => ({ getTitle: () => t.title, asDocumentTab: () => ({ getBody: () => body(t.text) }), getChildTabs: () => t.children.map(wrap) });
 const props = { UNSUB_SECRET: 'sample-secret-not-the-real-one' };
 const ctx = vm.createContext({
   console,

@@ -156,7 +156,7 @@ export function appsScript(book, opts) {
   return {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush() {} },
     DriveApp: { getFoldersByName: () => iter([]), createFolder() { throw new Error('Drive is not imitated: file uploads are not part of these tests'); } },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; }, getKeys: () => Object.keys(props), getProperties: () => ({ ...props }) }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     MailApp: { getRemainingDailyQuota: () => 0 },

@@ -345,7 +345,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -405,6 +405,7 @@ var WANTS_STATUS = { confirm: 'submitted', resume: 'in progress', resume2: 'in p
 function sendMail() {
   var props = PropertiesService.getScriptProperties();
   importSecrets(props);
+  uptakeIfAsked(props);
   var cfg = mailConfig(props);
   if (!cfg) return;
   var lock = LockService.getScriptLock();
@@ -459,7 +460,8 @@ function mailConfig(props) {
     only: res.length ? function (to) { to = lower(to); return res.some(function (r) { return r.test(to); }); } : null,
     testDay: res.length && minutes > 0 ? minutes * 60 * 1000 : 0,
     secret: p('UNSUB_SECRET'), emails: {}, textError: '' };
-  try { cfg.emails = loadEmails(p('EMAILS_DOC_ID') || EMAILS_DOC); } catch (e) { cfg.textError = 'cannot read the emails Doc: ' + String(e).slice(0, 120); }
+  cfg.emails = takenEmails(props);
+  if (!Object.keys(cfg.emails).length) cfg.textError = 'no email texts taken in yet (run the uptake: v4air-site scripts/emails-uptake.py)';
   return cfg;
 }
 
@@ -521,7 +523,7 @@ function dueMail(cfg, log) {
       else if (flow.base === 'prev') base = isDate(prevAt) ? prevAt : null;
       if (base && flow.base !== 'prev') base = new Date(Math.max(base, cfg.start));
       var when = flow.kind === 'confirm' ? rec.sent : rec.saved;
-      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS / DAY * D && !!cfg.emails[flow.tab + ' (late)'];
+      it.late = !!flow.late && isDate(when) && cfg.now - when > LATE_MS / DAY * D && !!cfg.emails[tabKey(flow.tab + ' (late)')];
       var problem = textProblem(cfg, it);
       if (!to) it.skip = flow.form === 'N' ? 'no email address (contact: ' + (rec.contact || 'empty') + ')' : 'no email';
       else if (cfg.only && !cfg.only(to)) it.skip = 'test mode: not on MAIL_ONLY';
@@ -617,12 +619,60 @@ function acceptLink(cfg, id) {
 var EMAILS_DOC = '1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g';
 var PLACEHOLDERS = ['NAME', 'FIRST_NAME', 'ID', 'LINK', 'NOMINATE_LINK', 'UNSUBSCRIBE_LINK', 'SENT_DATE', 'STARTED_DATE', 'NOMINATOR', 'ACCEPT_LINK'];
 
+/* The mailer sends from its own copy of the texts, never straight from the Doc (Petr, 18 Nov 2026): an edit, an export or a
+   deleted Doc changes nothing until someone takes the texts in on purpose. Taking in = the settings key EMAILS_UPTAKE gets a
+   new value (scripts/emails-uptake.py writes it into Petr's settings folder). The next run then reads the Doc, checks every
+   email the mailer can send (its tab is there and passes textProblem), and only if all pass replaces the copy, which lives in
+   script properties EMAIL_TEXT_<tab key> (one per email, so no value nears the 9 KB limit) and EMAIL_TEXTS_TAKEN.
+   Either way the tab "Email texts" of the Sheet shows the outcome and the texts that are live. */
+var TEXTS_TAB = 'Email texts', TEXT_PREFIX = 'EMAIL_TEXT_';
+function takenEmails(props) {
+  var all = props.getProperties ? props.getProperties() : {}, out = {};
+  Object.keys(all).forEach(function (k) { if (k.indexOf(TEXT_PREFIX) === 0) { try { out[k.slice(TEXT_PREFIX.length)] = JSON.parse(all[k]); } catch (e) {} } });
+  return out;
+}
+
+function uptakeIfAsked(props) {
+  var ask = props.getProperty('EMAILS_UPTAKE');
+  if (!ask || ask === props.getProperty('EMAILS_UPTAKE_DONE')) return;
+  props.setProperty('EMAILS_UPTAKE_DONE', ask);           /* once per request, whatever happens */
+  var docId = props.getProperty('EMAILS_DOC_ID') || EMAILS_DOC, now = new Date(), problems = [], got = {};
+  try { got = loadEmails(docId); } catch (e) { problems.push('cannot read the emails Doc: ' + String(e).slice(0, 160)); }
+  var tabs = {};
+  FLOWS.forEach(function (f) { tabs[f.tab] = f; if (f.late) tabs[f.tab + ' (late)'] = { form: f.form, kind: f.kind, tab: f.tab + ' (late)', optional: true }; });
+  if (!problems.length) Object.keys(tabs).forEach(function (t) {
+    var f = tabs[t];
+    if (!got[tabKey(t)]) { if (!f.optional) problems.push('no tab "' + t + '"'); return; }
+    var why = textProblem({ emails: got, textError: '' }, { flow: { form: f.form, kind: f.kind, tab: t }, late: false });
+    if (why) problems.push(why);
+  });
+  var stamp = Utilities.formatDate(now, 'Europe/Prague', 'dd.MM.yyyy HH:mm'), keep = Object.keys(tabs).filter(function (t) { return got[tabKey(t)]; });
+  if (!problems.length) {
+    props.getKeys().forEach(function (k) { if (k.indexOf(TEXT_PREFIX) === 0) props.deleteProperty(k); });
+    keep.forEach(function (t) { var e = got[tabKey(t)]; props.setProperty(TEXT_PREFIX + tabKey(t), JSON.stringify({ tab: t, subject: e.subject, body: e.body })); });
+    props.setProperty('EMAIL_TEXTS_TAKEN', JSON.stringify({ at: now.toISOString(), doc: docId, request: ask, emails: keep.length }));
+  }
+  var live = takenEmails(props), rows = [['request', 'result', 'checked_at', 'email', 'subject', 'body']];
+  rows.push([ask, problems.length ? 'refused, the texts in use stay: ' + problems.join('; ') : 'taken in: ' + keep.length + ' emails', stamp, '', '', '']);
+  Object.keys(live).sort().forEach(function (k) { rows.push(['', 'in use', '', live[k].tab, live[k].subject, live[k].body]); });
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(TEXTS_TAB) || ss.insertSheet(TEXTS_TAB);
+  sh.clearContents();
+  sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows.map(function (r) { return r.map(function (x) { return cellText(String(x)); }); }));
+  sh.setFrozenRows(2);
+  console.log('email texts uptake ' + ask + ': ' + rows[1][1]);
+}
+
 function loadEmails(id) {
   var out = {};
   var walk = function (tabs) {
     tabs.forEach(function (t) {
-      var e = parseEmail(t.asDocumentTab().getBody().getText());
-      if (e) out[t.getTitle().trim()] = e;
+      var body = t.asDocumentTab().getBody(), paras = [];
+      for (var i = 0; i < body.getNumChildren(); i++) {
+        var el = body.getChild(i), type = String(el.getType());
+        if (type === 'PARAGRAPH' || type === 'LIST_ITEM') paras.push(el.asText().getText());
+      }
+      var e = parseEmail(paras);
+      if (e) out[tabKey(t.getTitle())] = e;
       walk(t.getChildTabs());
     });
   };
@@ -630,17 +680,35 @@ function loadEmails(id) {
   return out;
 }
 
-/* {subject, body} from one tab's text, or null when the tab has no "Subject:" line (such as "How it works") */
-function parseEmail(text) {
-  var lines = String(text).replace(/\r\n?|\u000b/g, '\n').split('\n'), i = -1;
-  for (var j = 0; j < lines.length && i < 0; j++) if (/^Subject:/.test(lines[j])) i = j;
+/* Tab names are matched without case, spaces or punctuation: Typecase writes "Deadline reminder: 1 week" as "Deadline reminder 1 week". */
+function tabKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+
+/* {subject, body} from one tab's paragraphs, or null when the tab has no "Subject:" paragraph (such as "How it works").
+   Two layouts, told apart by empty paragraphs after the subject:
+   - Typecase's (no empty paragraphs): one empty line between two paragraphs, a line break inside a paragraph stays a line
+     break. Typecase writes "one empty line = a new paragraph", so a text reads the same in Typecase, in the Doc and in the email.
+   - typed line by line (each line its own paragraph, an empty paragraph for each empty line): the lines as they are.
+   A tab starts with its "Subject:" paragraph. Text above it is never sent and makes the email blocked (textProblem), so a
+   misplaced paragraph shows in "Mail preview" instead of vanishing. The rules of each email live in the Doc
+   "V4AIR form emails: how sending works", not in the email tabs. */
+function parseEmail(paras) {
+  paras = paras.map(function (p) { return String(p).replace(/\r\n?|\u000b/g, '\n').replace(/[ \t]+$/gm, ''); });
+  var i = -1;
+  for (var j = 0; j < paras.length && i < 0; j++) if (/^Subject:/.test(paras[j])) i = j;
   if (i < 0) return null;
-  return { subject: lines[i].replace(/^Subject:\s*/, '').trim(), body: lines.slice(i + 1).join('\n').replace(/^\n+|\s+$/g, '') + '\n' };
+  var first = paras[i].split('\n'), rest = first.slice(1).join('\n'), after = (rest.trim() ? [rest] : []).concat(paras.slice(i + 1));
+  var inner = after.slice(0), lineByLine;
+  while (inner.length && !inner[0].trim()) inner.shift();
+  while (inner.length && !inner[inner.length - 1].trim()) inner.pop();
+  lineByLine = inner.some(function (p) { return !p.trim(); });
+  var body = lineByLine ? inner.join('\n') : inner.map(function (p) { return p.replace(/^\n+|\n+$/g, ''); }).join('\n\n');
+  var above = paras.slice(0, i).filter(function (p) { return p.trim(); }).length;
+  return { subject: first[0].replace(/^Subject:\s*/, '').trim(), body: body + '\n', above: above };
 }
 
 function emailFor(cfg, it) {
   var tab = it.flow.tab;
-  return { tab: tab, t: (it.late && cfg.emails[tab + ' (late)']) || cfg.emails[tab] };
+  return { tab: tab, t: (it.late && cfg.emails[tabKey(tab + ' (late)')]) || cfg.emails[tabKey(tab)] };
 }
 
 /* '' when the item's text is usable, otherwise why not */
@@ -649,6 +717,7 @@ function textProblem(cfg, it) {
   var e = emailFor(cfg, it), all = e.t ? e.t.subject + '\n' + e.t.body : '', need = it.flow.form === 'N' ? '{ACCEPT_LINK}' : '{LINK}';
   if (!e.t) return 'no tab "' + e.tab + '" with a Subject line in the emails Doc';
   if (!e.t.subject) return 'empty subject in tab "' + e.tab + '"';
+  if (e.t.above) return 'text above the Subject line in tab "' + e.tab + '"';
   var bad = (all.match(/\{[A-Z_]+\}/g) || []).filter(function (x) { return PLACEHOLDERS.indexOf(x.slice(1, -1)) === -1; });
   if (bad.length) return 'unknown placeholder ' + bad[0] + ' in tab "' + e.tab + '"';
   if (e.t.body.indexOf(need) === -1) return 'no ' + need + ' in tab "' + e.tab + '"';
