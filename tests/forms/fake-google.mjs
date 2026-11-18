@@ -118,7 +118,7 @@ export function restHandler(book) {
 
 /* ---------- Apps Script services (for Code.gs) ---------- */
 export function appsScript(book, opts) {
-  const DATES = ['started_at', 'last_saved_at', 'submitted_at', 'confirm_sent_at', 'resume_sent_at', 'saved_at'];
+  const DATES = ['started_at', 'last_saved_at', 'submitted_at', 'confirm_sent_at', 'resume_sent_at', 'saved_at', 'sent_at'];
   class Rng {
     constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr, nc }); }
     a1() { return `'${this.sh.t.title.replace(/'/g, "''")}'!${colName(this.c)}${this.r}:${colName(this.c + this.nc - 1)}${this.r + this.nr - 1}`; }
@@ -142,6 +142,7 @@ export function appsScript(book, opts) {
     getRange(r, c, nr, nc) { return new Rng(this, r, c, nr || 1, nc || 1); }
     setFrozenRows(n) { this.t.frozen = n; } setFrozenColumns() {}
     deleteRow(r) { this.t.rows.splice(r - 1, 1); }
+    clearContents() { this.t.rows = []; }
   }
   const ss = {
     getSheets: () => [...book.tabs.values()].map(t => new Sh(t)),
@@ -154,7 +155,7 @@ export function appsScript(book, opts) {
   return {
     SpreadsheetApp: { getActiveSpreadsheet: () => ss, flush() {} },
     DriveApp: { getFoldersByName: () => iter([]), createFolder() { throw new Error('Drive is not imitated: file uploads are not part of these tests'); } },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     MailApp: { getRemainingDailyQuota: () => 0 },
