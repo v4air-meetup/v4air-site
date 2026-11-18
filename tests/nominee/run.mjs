@@ -2,7 +2,7 @@
    /accept-nomination/ in Chrome with its Worker calls answered by the same Worker. Nothing real is touched.
    Checks: a bad or foreign token is refused; "yes" needs the privacy notice and records consent; "no" wipes the nominee
    in Nominees and in the nomination's answers_json and adds the address to Unsubscribed; unsubscribing a nominee's address
-   does the same; a wiped nominee reads as declined; an unknown nominee reads as gone; the page sends Yes only after the tick
+   only stops emails (details kept) and a data request only adds a row; a wiped nominee reads as declined; an unknown nominee reads as gone; the page sends Yes only after the tick
    and then opens the application form; a nomination sent again keeps decisions and mailer columns and wipes declined
    nominees, and a new nomination of someone who declined is wiped at once.
    Run: cd tests && npm run nominee   (CHROME=path uses a local Chrome) */
@@ -65,7 +65,13 @@ r = await post({ action: 'nomination', ...link(2), decision: 'yes', notice: 'pri
 check('a declined nominee cannot be revived from the link', r.state === 'declined' && nominee(2).decision === 'declined', r);
 const e3 = b64url(Buffer.from('nominee3@example.org')), t3 = tok('nominee3@example.org');
 r = await post({ action: 'unsubscribe', e: e3, t: t3 });
-check('unsubscribing a nominee wipes them like a no', r.ok && nominee(3).decision === 'declined' && !nominee(3).name && !card(3).name, nominee(3));
+check('unsubscribing a nominee only stops emails: details and card kept', r.ok && unsub().includes('nominee3@example.org/page') && !nominee(3).decision && nominee(3).name === 'Nominee 3' && card(3).name === 'Nominee 3', nominee(3));
+r = await post({ action: 'data_request', e: e3, t: 'x'.repeat(43) });
+check('a data request with a bad token is refused', r.error === 'bad_link', r);
+r = await post({ action: 'data_request', e: e3, t: t3 });
+await post({ action: 'data_request', e: e3, t: t3 });
+const dr = tab('Data requests');
+check('a data request adds one row (email, date, source) and deletes nothing', r.ok && dr.length === 1 && dr[0].email === 'nominee3@example.org' && dr[0].source === 'unsubscribe page' && typeof dr[0].requested_at === 'number' && nominee(3).name === 'Nominee 3', dr);
 r = await post({ action: 'nomination', id: `${NID}.4`, t: tok(`nomination:${NID}.4`) });
 check('an unknown nominee reads as gone', r.ok && r.state === 'gone', r);
 check('other columns of the nominee rows are unchanged', nominee(2).nominator_name === 'Alice Nominator' && nominee(2).saved_at === 46340 && nominee(1).affiliation === 'Uni 1');
@@ -83,6 +89,7 @@ await post({ action: 'nomination', ...L(2), decision: 'no' });
   const nt = book.tab('Nominees'), c = nt.rows[0].length; nt.rows[0].push('invite_sent_at'); nt.cols = Math.max(nt.cols, c + 1);
   nt.rows.forEach((r, i) => { if (i && r[0] === BID && String(r[4]) === '1') { while (r.length < c) r.push(''); r[c] = 46345; } });
 }
+await post({ action: 'unsubscribe', e: b64url(Buffer.from('r3@example.org')), t: tok('r3@example.org') }); /* a plain unsubscribe: r3 keeps their details */
 const saved1 = rows().find(r => String(r.n) === '3').saved_at;
 const again = await post({ action: 'save', form: 'B', final: true, id: BID, token: first.token, answers: B(rc.map(c => ({ ...c }))) });
 const [a1, a2, a3] = [1, 2, 3].map(n => rows().find(r => String(r.n) === String(n)));
@@ -91,7 +98,7 @@ check('sent again: the accepted nominee keeps the decision, notice and the maile
 check('sent again: the declined nominee stays wiped and declined', a2.decision === 'declined' && !a2.name && !a2.contact && !a2.why, a2);
 const cardsNow = JSON.parse(tab('Nominations').find(r => r.response_id === BID).answers_json).__cards;
 check('sent again: the declined card is wiped in answers_json, the others kept', !cardsNow[1].name && !cardsNow[1].contact && cardsNow[0].name === 'Person r1' && cardsNow[2].name === 'Person r3', cardsNow);
-check('sent again: an undecided nominee keeps their first saved_at', a3.saved_at === saved1 && a3.name === 'Person r3' && !a3.decision, a3);
+check('sent again: an unsubscribed, undecided nominee keeps their details and first saved_at', a3.saved_at === saved1 && a3.name === 'Person r3' && !a3.decision && cardsNow[2].name === 'Person r3', a3);
 const other = await post({ action: 'save', form: 'B', final: true, answers: B([{ ...rc[1] }], 'Carol') });
 const o1 = tab('Nominees').find(r => r.nomination_id === other.id);
 check('a new nomination of someone who declined is wiped at once', o1 && o1.decision === 'declined' && !o1.name && !o1.contact, o1);
@@ -123,6 +130,12 @@ check('Yes records consent and opens the application form', nominee(1).decision 
 await page.goto('http://127.0.0.1:4320/accept-nomination/');
 check('a link without id and token shows "not valid"', await page.isVisible('#bad'));
 check('no JavaScript errors on the page', !errors.filter(e => !/apply/.test(e)).length, errors);
+const ue = b64url(Buffer.from('r1@example.org')), ut = tok('r1@example.org');
+await page.goto(`http://127.0.0.1:4320/unsubscribe/?e=${ue}&t=${ut}`);
+await page.waitForSelector('#done.on');
+await page.click('#ask');
+await page.waitForFunction(() => /delete your details/.test(document.getElementById('ask-msg').textContent));
+check('unsubscribe page: the delete button only files a data request', tab('Data requests').some(r => r.email === 'r1@example.org') && nominee(1).name === 'Nominee 1' && nominee(1).decision === 'accepted', tab('Data requests'));
 await browser.close();
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
