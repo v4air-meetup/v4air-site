@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<title>Your nomination: V4 AI Researchers Meetup</title>
+<script>
+  (function () {
+    /* saved choice wins; with none, dark from 17:00 to 07:00 (visitor's clock) */
+    var t = null; try { t = localStorage.getItem('v4air-theme'); } catch (e) {}
+    var h = new Date().getHours();
+    if (t === 'dark' || (t !== 'light' && (h >= 17 || h < 7))) document.documentElement.setAttribute('data-theme', 'dark');
+  })();
+</script>
+<style>
+  @font-face { font-family: 'Satoshi'; src: url('../fonts/satoshi-400.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+  @font-face { font-family: 'Satoshi'; src: url('../fonts/satoshi-500.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+  @font-face { font-family: 'Aileron'; src: url('../fonts/aileron-latin-800-normal.woff2') format('woff2'); font-weight: 800; font-display: swap; }
+  :root {
+    color-scheme: light;
+    --bg: #f2f3ec; --bg-raise: #f9f9f4; --line: #d3d5c8; --text: #161616; --text-2: #52564a;
+    --accent: #b35c1f; --teal: #4f8c88; --error: #b3402f;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f1a1c; --bg-raise: #152325; --line: #26383b; --text: #eef0e8; --text-2: #a5ada0;
+    --accent: #e9a24f; --teal: #7fc0bb; --error: #e07a68;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Satoshi', 'Segoe UI', system-ui, sans-serif; font-size: 1.0625rem; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  h1 { font-family: 'Aileron', 'Satoshi', system-ui, sans-serif; font-size: clamp(1.7rem, 1.2rem + 1.8vw, 2.4rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; margin: 0 0 1rem; text-wrap: balance; }
+  p { margin: 0 0 1rem; max-width: 60ch; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { color: var(--teal); }
+  main { max-width: 680px; margin: 0 auto; padding: clamp(3rem, 8vw, 6rem) clamp(1.25rem, 0.5rem + 3vw, 2.5rem); }
+  .panel { background: var(--bg-raise); border: 1px solid var(--line); border-radius: 14px; padding: clamp(1.4rem, 3.5vw, 2.4rem); }
+  .eyebrow { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 0.6rem; }
+  .muted { color: var(--text-2); }
+  .err h1 { color: var(--error); }
+  .state { display: none; }
+  .state.on { display: block; }
+  .tick { display: flex; gap: 0.7rem; align-items: flex-start; margin: 1.4rem 0 1.2rem; font-size: 1rem; }
+  .tick input { width: 1.2rem; height: 1.2rem; margin: 0.25rem 0 0; flex: none; accent-color: var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0 0 1.2rem; }
+  button { min-height: 46px; padding: 0.6rem 1.3rem; border-radius: 999px; font: 700 1rem/1.2 'Satoshi', 'Segoe UI', system-ui, sans-serif; cursor: pointer; }
+  .yes { border: 0; background: #dd7f3e; color: #221304; }
+  [data-theme="dark"] .yes { background: #e9a24f; }
+  .no { border: 1px solid var(--line); background: transparent; color: var(--text); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button:focus-visible, .tick input:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  .note { font-size: 0.95rem; }
+  .msg { color: var(--error); font-size: 0.95rem; min-height: 1.5em; }
+  footer { max-width: 680px; margin: 0 auto; padding: 0 clamp(1.25rem, 0.5rem + 3vw, 2.5rem) 3rem; font-size: 0.85rem; color: var(--text-2); }
+  footer a { color: var(--text-2); }
+</style>
+</head>
+<body>
+<main>
+  <div class="panel">
+    <p class="eyebrow">V4 AI Researchers Meetup</p>
+
+    <section class="state on" id="working">
+      <h1>One moment</h1>
+      <p class="muted">Loading your nomination.</p>
+    </section>
+
+    <section class="state" id="open">
+      <h1>You were nominated for V4AIR</h1>
+      <p><strong id="nominator"></strong> nominated you for the V4 AI Researchers Meetup (V4AIR), a three-day meetup at Kostelec Castle near Prague, 28 to 30 April 2027.</p>
+      <p>Do you accept the nomination?</p>
+      <label class="tick"><input type="checkbox" id="notice"> <span>I have read the <a href="/policy/privacy/#nominations" target="_blank" rel="noopener">privacy notice</a> and agree that you keep my name and email address to invite me to apply.</span></label>
+      <div class="row">
+        <button type="button" class="yes" id="yes" disabled>Yes, take me to the application</button>
+        <button type="button" class="no" id="no">No, delete my details</button>
+      </div>
+      <p class="msg" id="msg" role="status"></p>
+      <p class="note muted">If you say no, we delete your details straight away and do not contact you again. If you do nothing, we delete them 30 days after the nomination.</p>
+    </section>
+
+    <section class="state" id="accepted">
+      <h1>Thank you</h1>
+      <p>Your nomination is accepted. The application is one online form, and you can save it and finish it later.</p>
+      <p><a id="go" href="/apply/?utm_source=nomination&amp;utm_medium=email">Continue to the application</a></p>
+    </section>
+
+    <section class="state" id="declined">
+      <h1>Your details are deleted</h1>
+      <p>We have deleted the details your nominator gave us, and we will not contact you again.</p>
+      <p class="muted">If you change your mind, you can still <a href="/apply/">apply</a> until 15 January 2027.</p>
+    </section>
+
+    <section class="state" id="gone">
+      <h1>This nomination is no longer on record</h1>
+      <p>We have already deleted the details of this nomination. You can still <a href="/apply/">apply</a> until 15 January 2027.</p>
+    </section>
+
+    <section class="state err" id="bad">
+      <h1>This link is not valid</h1>
+      <p>Please use the link from the email about your nomination, or reply to that email.</p>
+    </section>
+
+    <section class="state err" id="fail">
+      <h1>Something went wrong</h1>
+      <p>Please try again in a minute, or reply to the email about your nomination.</p>
+    </section>
+
+    <p><a href="/">Back to v4air.eu</a></p>
+  </div>
+</main>
+<footer><a href="/policy/privacy/" target="_blank" rel="noopener">Privacy notice</a> · <a href="/policy/code-of-conduct/" target="_blank" rel="noopener">Code of Conduct</a></footer>
+<script>
+  (function () {
+    var WORKER = 'https://v4air-forms.v4air.workers.dev', NOTICE = 'privacy-v2';
+    var qs = new URLSearchParams(location.search);
+    var id = qs.get('id') || '', t = qs.get('t') || '';
+    var $ = function (x) { return document.getElementById(x); };
+    function show(s) {
+      var all = document.querySelectorAll('.state');
+      for (var i = 0; i < all.length; i++) all[i].classList.toggle('on', all[i].id === s);
+    }
+    function call(extra) {
+      var body = { action: 'nomination', id: id, t: t };
+      for (var k in extra) body[k] = extra[k];
+      return fetch(WORKER, { method: 'POST', body: JSON.stringify(body) }).then(function (r) { return r.json(); });
+    }
+    function land(j) {
+      if (!j || !j.ok) { show(j && j.error === 'bad_link' ? 'bad' : 'fail'); return; }
+      if (j.state === 'open') { $('nominator').textContent = j.nominator || 'Someone who knows your work'; show('open'); }
+      else show(j.state === 'accepted' || j.state === 'declined' || j.state === 'gone' ? j.state : 'fail');
+      if (j.state === 'accepted' && j.go) location.href = $('go').href;
+    }
+    if (!id || !t) { show('bad'); return; }
+    $('notice').addEventListener('change', function () { $('yes').disabled = !this.checked; $('msg').textContent = ''; });
+    function decide(d) {
+      $('yes').disabled = $('no').disabled = true; $('msg').textContent = '';
+      call(d === 'yes' ? { decision: 'yes', notice: NOTICE } : { decision: 'no' })
+        .then(function (j) { if (j && j.ok && j.state === 'accepted') j.go = true; land(j); })
+        .catch(function () { $('msg').textContent = 'That did not go through. Please try again.'; $('no').disabled = false; $('yes').disabled = !$('notice').checked; });
+    }
+    $('yes').addEventListener('click', function () { decide('yes'); });
+    $('no').addEventListener('click', function () { decide('no'); });
+    call({}).then(land).catch(function () { show('fail'); });
+  })();
+</script>
+</body>
+</html>
