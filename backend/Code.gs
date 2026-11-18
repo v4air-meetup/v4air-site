@@ -643,7 +643,9 @@ function tabKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g,
    - Typecase's (no empty paragraphs): one empty line between two paragraphs, a line break inside a paragraph stays a line
      break. Typecase writes "one empty line = a new paragraph", so a text reads the same in Typecase, in the Doc and in the email.
    - typed line by line (each line its own paragraph, an empty paragraph for each empty line): the lines as they are.
-   Paragraphs above the subject (the "Sent:" rule) are ignored. */
+   A tab starts with its "Subject:" paragraph. Text above it is never sent and makes the email blocked (textProblem), so a
+   misplaced paragraph shows in "Mail preview" instead of vanishing. The rules of each email live in the Doc
+   "V4AIR form emails: how sending works", not in the email tabs. */
 function parseEmail(paras) {
   paras = paras.map(function (p) { return String(p).replace(/\r\n?|\u000b/g, '\n').replace(/[ \t]+$/gm, ''); });
   var i = -1;
@@ -655,7 +657,8 @@ function parseEmail(paras) {
   while (inner.length && !inner[inner.length - 1].trim()) inner.pop();
   lineByLine = inner.some(function (p) { return !p.trim(); });
   var body = lineByLine ? inner.join('\n') : inner.map(function (p) { return p.replace(/^\n+|\n+$/g, ''); }).join('\n\n');
-  return { subject: first[0].replace(/^Subject:\s*/, '').trim(), body: body + '\n' };
+  var above = paras.slice(0, i).filter(function (p) { return p.trim(); }).length;
+  return { subject: first[0].replace(/^Subject:\s*/, '').trim(), body: body + '\n', above: above };
 }
 
 function emailFor(cfg, it) {
@@ -669,6 +672,7 @@ function textProblem(cfg, it) {
   var e = emailFor(cfg, it), all = e.t ? e.t.subject + '\n' + e.t.body : '', need = it.flow.form === 'N' ? '{ACCEPT_LINK}' : '{LINK}';
   if (!e.t) return 'no tab "' + e.tab + '" with a Subject line in the emails Doc';
   if (!e.t.subject) return 'empty subject in tab "' + e.tab + '"';
+  if (e.t.above) return 'text above the Subject line in tab "' + e.tab + '"';
   var bad = (all.match(/\{[A-Z_]+\}/g) || []).filter(function (x) { return PLACEHOLDERS.indexOf(x.slice(1, -1)) === -1; });
   if (bad.length) return 'unknown placeholder ' + bad[0] + ' in tab "' + e.tab + '"';
   if (e.t.body.indexOf(need) === -1) return 'no ' + need + ' in tab "' + e.tab + '"';

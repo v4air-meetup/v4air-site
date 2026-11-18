@@ -9,8 +9,9 @@ Reference for people and agents. The mailer is `sendMail` in `backend/Code.gs`; 
 | Doc | Script property `EMAILS_DOC_ID`. Unset: "V4AIR form emails" (`1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g`, the working Doc). petkout1 must be able to read it. |
 | When read | Every run (every 5 minutes). An edit goes out from the next run. |
 | One email | One tab. Tab name = email name, exactly (table below). Child tabs are read too. |
-| Tab text | Optional lines first (e.g. the "Sent:" rule, ignored). Then one line `Subject: <subject>`. Everything after it is the body, as plain text. |
-| Ignored tabs | Any tab without a `Subject:` line (e.g. "How it works"). |
+| Tab text | Starts with `Subject: <subject>`; everything after it is the body. Text above the subject blocks that email ("Mail preview" says why). Paragraphs: one empty line between paragraphs, a line break inside one stays a line break (Typecase's layout); a tab typed line by line also works. |
+| Rules | Who gets which email and when: Google Doc "V4AIR form emails: how sending works" (COPY, `1vPGmd9AfwjXwMcRJPz3sn58-kOhFIajwz5PKvESy0wo`), not in the email tabs. |
+| Ignored tabs | Any tab without a `Subject:` paragraph. Tab names match without case, spaces or punctuation (Typecase writes `Deadline reminder: 1 week` as `Deadline reminder, 1 week`). |
 | Placeholders | Single braces, filled per person: `{NAME}` (full name) `{FIRST_NAME}` (first word that is not an academic title, used in greetings) `{ID}` `{LINK}` `{NOMINATE_LINK}` `{UNSUBSCRIBE_LINK}` `{SENT_DATE}` `{STARTED_DATE}` `{NOMINATOR}` `{ACCEPT_LINK}`. Any other `{WORD}` blocks that email. |
 | `{LINK}` | Applications and speakers: the personal link to their form. Nomination confirmation and nominate reminders: the nominate page. Nominee emails: the apply page. |
 | Required | Body has `{UNSUBSCRIBE_LINK}` and `{LINK}` (nominee emails: `{ACCEPT_LINK}` instead). Subject not empty. |
@@ -60,7 +61,7 @@ Reading every email before go-live: `python3 tests/mail/fixture-from-doc.py`, th
 |---|---|
 | Output format | `gdoc_tabs` (one Doc, one tab per document) |
 | Document path rule | The exact tab name from the table above. No `/` (Typecase turns it into " · "), at most 50 characters. |
-| Google folder | A folder in the V4AIR Drive tree (shared with petkout1). Typecase creates the Doc on the first export and updates it in place afterwards. |
+| Google | "Write into this Doc" = the Doc "V4AIR form emails"; "Look like this Doc" = the same Doc. Typecase rewrites the tab of each email and leaves other tabs alone. Project "V4AIR form emails", built by v4air `drafts/copy-system/form-emails/make_project.py`. |
 | Text | First line `Subject: ...`, then a blank line, then the body. |
 | Placeholders | Write the mailer's placeholders with single braces (`{NAME}`). Typecase only fills `{{fact}}`; single braces pass through unchanged. Never `{{NAME}}`. |
 | Approval gate | `approved`: the export writes only reviewed text, and the export is what goes to applicants. |

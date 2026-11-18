@@ -339,6 +339,10 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   if (cur.length) blocks.push(cur.join('\u000b'));
   const b = t.ctx.parseEmail(blocks);
   check('Typecase layout and line-by-line layout give the same email', a.subject === b.subject && a.body === b.body && /\n\nThis link is personal/.test(b.body), [a.body.slice(0, 120), b.body.slice(0, 120)]);
+  const above = JSON.parse(JSON.stringify(DOC)); above.find(x => x.title === 'Application confirmation').text = 'A stray line\n' + above.find(x => x.title === 'Application confirmation').text;
+  const u2 = setup({}, { doc: above }); u2.run();
+  const stray = by(rows(u2.book, 'Mail preview'), 'V4A-NEW1-AAAA')[0];
+  check('text above the Subject line blocks the email, with the reason', stray.would_send === 'no' && /text above the Subject line/.test(stray.skip_reason), stray.skip_reason);
   check('tab names match without punctuation', t.ctx.tabKey('Deadline reminder: 1 week') === t.ctx.tabKey('Deadline reminder 1 week') && t.ctx.tabKey('Application confirmation (late)') === 'applicationconfirmationlate', '');
 }
 console.log(fails ? fails + ' failed' : 'all passed');
