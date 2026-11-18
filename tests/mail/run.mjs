@@ -28,7 +28,8 @@ const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Erro
 /* a Date the mailer sees: new Date() without arguments is clock.now */
 const clockDate = clock => class extends Date { constructor(...a) { if (a.length) super(...a); else super(clock.now); } static now() { return clock.now; } };
 
-function setup(props, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [], seed, clock } = {}) {
+function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [], seed, clock } = {}) {
+  const props = { EMAILS_UPTAKE: 'test-1', ...props0 }; /* every test takes the texts in first */
   const book = new Book();
   if (seed) seed(book); else book.seed('Applications', HEAD, [
     ['V4A-OLD1-AAAA', 'h1', 'submitted', ago(31), ago(30), ago(30), '', '{}', 'Olga', 'old@uni.cz'],
@@ -138,19 +139,28 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
     check(name + ': sends nothing, writes nothing', x.sent.length === 0 && !x.book.tab('Email log') && !x.book.tab('Mail preview'), x.sent.length);
   }
 }
-/* 6. texts come from the Doc at run time; a broken text or an unreadable Doc stops that email, not the run */
+/* 6. texts are taken in on purpose: an edit or a broken Doc changes nothing until the next uptake, and a bad uptake is refused */
 {
-  const edited = JSON.parse(JSON.stringify(DOC));
-  edited.find(t => t.title === 'Application confirmation').text = edited.find(t => t.title === 'Application confirmation').text.replace('Thank you. We received', 'EDITED IN THE DOC. We received');
-  edited.find(t => t.title === 'Application resume (late)').text += '\n{OOPS}';
-  const t = setup({ MAIL_START: new Date(now - 2 * DAY).toISOString() }, { doc: edited });
+  const live = JSON.parse(JSON.stringify(DOC)), tab = n => live.find(x => x.title === n);
+  const t = setup({ MAIL_START: new Date(now - 2 * DAY).toISOString() }, { doc: live });
+  const fresh = () => by(rows(t.book, 'Mail preview'), 'V4A-NEW1-AAAA')[0];
+  const status = () => rows(t.book, 'Email texts')[0].result;
   t.run();
-  const p = rows(t.book, 'Mail preview'), fresh = by(p, 'V4A-NEW1-AAAA')[0], drf = by(p, 'V4A-DRF1-AAAA')[0];
-  check('doc: an edit in the Doc is used on the next run', /EDITED IN THE DOC/.test(fresh.body), fresh.body.slice(0, 80));
-  check('doc: an unknown placeholder stops that email, with the reason', drf.would_send === 'no' && /unknown placeholder \{OOPS\}/.test(drf.skip_reason), drf.skip_reason);
+  check('uptake: the first run takes the texts in', /taken in: 17 emails/.test(status()) && /Thank you\. We received/.test(fresh().body), status());
+  tab('Application confirmation').text = tab('Application confirmation').text.replace('Thank you. We received', 'EDITED IN THE DOC. We received');
+  t.run();
+  check('uptake: an edit in the Doc is not sent before the next uptake', /Thank you\. We received/.test(fresh().body), fresh().body.slice(0, 80));
+  t.ctx.PropertiesService.getScriptProperties().setProperty('EMAILS_UPTAKE', 'test-2'); t.run();
+  check('uptake: after the next uptake the edit is in the email', /EDITED IN THE DOC/.test(fresh().body) && /taken in/.test(status()), fresh().body.slice(0, 80));
+  tab('Application resume (late)').text += '\n{OOPS}';
+  tab('Speaker resume').text = '';
+  t.ctx.PropertiesService.getScriptProperties().setProperty('EMAILS_UPTAKE', 'test-3'); t.run();
+  check('uptake: a broken Doc is refused with the reasons, the texts in use stay', /^refused/.test(status()) && /unknown placeholder \{OOPS\}/.test(status()) && /no tab "Speaker resume"/.test(status()) && /EDITED IN THE DOC/.test(fresh().body), status());
+  t.ctx.PropertiesService.getScriptProperties().setProperty('EMAILS_UPTAKE', 'test-3'); t.run();
+  check('uptake: the same request is not run twice', rows(t.book, 'Email texts')[0].request === 'test-3', rows(t.book, 'Email texts')[0]);
   const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's' }, { brokenDoc: true });
   u.run();
-  check('doc: unreadable Doc sends nothing', u.sent.length === 0, u.sent.length);
+  check('uptake: with no texts ever taken in, nothing is sent', u.sent.length === 0 && /^refused/.test(rows(u.book, 'Email texts')[0].result), u.sent.length);
 }
 /* 7. Petr's settings folder: read once per change, never trashed */
 {
@@ -342,7 +352,7 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const above = JSON.parse(JSON.stringify(DOC)); above.find(x => x.title === 'Application confirmation').text = 'A stray line\n' + above.find(x => x.title === 'Application confirmation').text;
   const u2 = setup({}, { doc: above }); u2.run();
   const stray = by(rows(u2.book, 'Mail preview'), 'V4A-NEW1-AAAA')[0];
-  check('text above the Subject line blocks the email, with the reason', stray.would_send === 'no' && /text above the Subject line/.test(stray.skip_reason), stray.skip_reason);
+  check('text above the Subject line: the uptake is refused with the reason, nothing goes', stray.would_send === 'no' && /text above the Subject line/.test(rows(u2.book, 'Email texts')[0].result), rows(u2.book, 'Email texts')[0].result);
   check('tab names match without punctuation', t.ctx.tabKey('Deadline reminder: 1 week') === t.ctx.tabKey('Deadline reminder 1 week') && t.ctx.tabKey('Application confirmation (late)') === 'applicationconfirmationlate', '');
 }
 console.log(fails ? fails + ' failed' : 'all passed');

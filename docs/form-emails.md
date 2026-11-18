@@ -7,7 +7,7 @@ Reference for people and agents. The mailer is `sendMail` in `backend/Code.gs`; 
 | Item | Rule |
 |---|---|
 | Doc | Script property `EMAILS_DOC_ID`. Unset: "V4AIR form emails" (`1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g`, the working Doc). petkout1 must be able to read it. |
-| When read | Every run (every 5 minutes). An edit goes out from the next run. |
+| When read | Only on an uptake: `python3 scripts/emails-uptake.py` shows what changes, then asks the mailer to take the Doc's texts in. The mailer checks every email first and replaces its copy only if all pass (else it keeps the texts in use and says why in the Sheet tab "Email texts"). Between uptakes the mailer sends from its own copy (script properties), so an edit, an export or a deleted Doc changes nothing. |
 | One email | One tab. Tab name = email name, exactly (table below). Child tabs are read too. |
 | Tab text | Starts with `Subject: <subject>`; everything after it is the body. Text above the subject blocks that email ("Mail preview" says why). Paragraphs: one empty line between paragraphs, a line break inside one stays a line break (Typecase's layout); a tab typed line by line also works. |
 | Rules | Who gets which email and when: Google Doc "V4AIR form emails: how sending works" (COPY, `1vPGmd9AfwjXwMcRJPz3sn58-kOhFIajwz5PKvESy0wo`), not in the email tabs. |

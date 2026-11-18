@@ -345,7 +345,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -405,6 +405,7 @@ var WANTS_STATUS = { confirm: 'submitted', resume: 'in progress', resume2: 'in p
 function sendMail() {
   var props = PropertiesService.getScriptProperties();
   importSecrets(props);
+  uptakeIfAsked(props);
   var cfg = mailConfig(props);
   if (!cfg) return;
   var lock = LockService.getScriptLock();
@@ -459,7 +460,8 @@ function mailConfig(props) {
     only: res.length ? function (to) { to = lower(to); return res.some(function (r) { return r.test(to); }); } : null,
     testDay: res.length && minutes > 0 ? minutes * 60 * 1000 : 0,
     secret: p('UNSUB_SECRET'), emails: {}, textError: '' };
-  try { cfg.emails = loadEmails(p('EMAILS_DOC_ID') || EMAILS_DOC); } catch (e) { cfg.textError = 'cannot read the emails Doc: ' + String(e).slice(0, 120); }
+  cfg.emails = takenEmails(props);
+  if (!Object.keys(cfg.emails).length) cfg.textError = 'no email texts taken in yet (run the uptake: v4air-site scripts/emails-uptake.py)';
   return cfg;
 }
 
@@ -616,6 +618,49 @@ function acceptLink(cfg, id) {
    unknown placeholder, or lacks its link ({LINK}, or {ACCEPT_LINK} for nominees) or {UNSUBSCRIBE_LINK}, is not sent; the preview says why. */
 var EMAILS_DOC = '1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g';
 var PLACEHOLDERS = ['NAME', 'FIRST_NAME', 'ID', 'LINK', 'NOMINATE_LINK', 'UNSUBSCRIBE_LINK', 'SENT_DATE', 'STARTED_DATE', 'NOMINATOR', 'ACCEPT_LINK'];
+
+/* The mailer sends from its own copy of the texts, never straight from the Doc (Petr, 18 Nov 2026): an edit, an export or a
+   deleted Doc changes nothing until someone takes the texts in on purpose. Taking in = the settings key EMAILS_UPTAKE gets a
+   new value (scripts/emails-uptake.py writes it into Petr's settings folder). The next run then reads the Doc, checks every
+   email the mailer can send (its tab is there and passes textProblem), and only if all pass replaces the copy, which lives in
+   script properties EMAIL_TEXT_<tab key> (one per email, so no value nears the 9 KB limit) and EMAIL_TEXTS_TAKEN.
+   Either way the tab "Email texts" of the Sheet shows the outcome and the texts that are live. */
+var TEXTS_TAB = 'Email texts', TEXT_PREFIX = 'EMAIL_TEXT_';
+function takenEmails(props) {
+  var all = props.getProperties ? props.getProperties() : {}, out = {};
+  Object.keys(all).forEach(function (k) { if (k.indexOf(TEXT_PREFIX) === 0) { try { out[k.slice(TEXT_PREFIX.length)] = JSON.parse(all[k]); } catch (e) {} } });
+  return out;
+}
+
+function uptakeIfAsked(props) {
+  var ask = props.getProperty('EMAILS_UPTAKE');
+  if (!ask || ask === props.getProperty('EMAILS_UPTAKE_DONE')) return;
+  props.setProperty('EMAILS_UPTAKE_DONE', ask);           /* once per request, whatever happens */
+  var docId = props.getProperty('EMAILS_DOC_ID') || EMAILS_DOC, now = new Date(), problems = [], got = {};
+  try { got = loadEmails(docId); } catch (e) { problems.push('cannot read the emails Doc: ' + String(e).slice(0, 160)); }
+  var tabs = {};
+  FLOWS.forEach(function (f) { tabs[f.tab] = f; if (f.late) tabs[f.tab + ' (late)'] = { form: f.form, kind: f.kind, tab: f.tab + ' (late)', optional: true }; });
+  if (!problems.length) Object.keys(tabs).forEach(function (t) {
+    var f = tabs[t];
+    if (!got[tabKey(t)]) { if (!f.optional) problems.push('no tab "' + t + '"'); return; }
+    var why = textProblem({ emails: got, textError: '' }, { flow: { form: f.form, kind: f.kind, tab: t }, late: false });
+    if (why) problems.push(why);
+  });
+  var stamp = Utilities.formatDate(now, 'Europe/Prague', 'dd.MM.yyyy HH:mm'), keep = Object.keys(tabs).filter(function (t) { return got[tabKey(t)]; });
+  if (!problems.length) {
+    props.getKeys().forEach(function (k) { if (k.indexOf(TEXT_PREFIX) === 0) props.deleteProperty(k); });
+    keep.forEach(function (t) { var e = got[tabKey(t)]; props.setProperty(TEXT_PREFIX + tabKey(t), JSON.stringify({ tab: t, subject: e.subject, body: e.body })); });
+    props.setProperty('EMAIL_TEXTS_TAKEN', JSON.stringify({ at: now.toISOString(), doc: docId, request: ask, emails: keep.length }));
+  }
+  var live = takenEmails(props), rows = [['request', 'result', 'checked_at', 'email', 'subject', 'body']];
+  rows.push([ask, problems.length ? 'refused, the texts in use stay: ' + problems.join('; ') : 'taken in: ' + keep.length + ' emails', stamp, '', '', '']);
+  Object.keys(live).sort().forEach(function (k) { rows.push(['', 'in use', '', live[k].tab, live[k].subject, live[k].body]); });
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(TEXTS_TAB) || ss.insertSheet(TEXTS_TAB);
+  sh.clearContents();
+  sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows.map(function (r) { return r.map(function (x) { return cellText(String(x)); }); }));
+  sh.setFrozenRows(2);
+  console.log('email texts uptake ' + ask + ': ' + rows[1][1]);
+}
 
 function loadEmails(id) {
   var out = {};
