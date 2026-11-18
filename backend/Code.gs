@@ -345,7 +345,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE', 'RESEND_READ_KEY'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -357,7 +357,7 @@ var TEST_ADDRESS = /@example\.(com|net|org)$/i;
 var PREVIEW_TAB = 'Mail preview', UNSUB_TAB = 'Unsubscribed', LOG_TAB = 'Email log', NOMINEE_TAB = 'Nominees';
 /* requests to delete someone's details: rows (email, requested_at, source) written by the site, forwarded to the team */
 var DATA_TAB = 'Data requests', DATA_TO = 'data@v4air.eu';
-var LOG_HEAD = ['sent_at', 'mode', 'form', 'kind', 'response_id', 'to', 'sent_to', 'subject', 'status', 'detail'];
+var LOG_HEAD = ['sent_at', 'mode', 'form', 'kind', 'response_id', 'to', 'sent_to', 'subject', 'status', 'detail', 'delivery'];
 var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 /* Every email the mailer sends, in priority order: a person gets at most one email a day, the first one due here goes and
@@ -423,6 +423,7 @@ function sendMail() {
       var items = dueMail(cfg, log).filter(function (it) { return !it.skip; }).slice(0, Math.max(0, Math.min(MAIL_BATCH, limit)));
       for (var i = 0; i < items.length; i++) if (!sendOne(cfg, log, items[i])) break;
       notifyDataRequests(cfg, true);
+      if (cfg.mode === 'live') checkBounces(cfg);
       if (cfg.only) writePreview(cfg);
     }
     var today = Utilities.formatDate(cfg.now, 'Europe/Prague', 'yyyy-MM-dd');
@@ -529,6 +530,7 @@ function dueMail(cfg, log) {
       else if (cfg.only && !cfg.only(to)) it.skip = 'test mode: not on MAIL_ONLY';
       else if (TEST_ADDRESS.test(to)) it.skip = 'test address';
       else if (unsub[to] === 'test') it.skip = 'test address (tab Unsubscribed, source test)';
+      else if (unsub[to] === 'bounced' || unsub[to] === 'complained') it.skip = 'paused: an earlier email ' + unsub[to] + ' (tab Unsubscribed)';
       else if (flow.kind !== 'confirm' && unsub[to]) it.skip = 'unsubscribed';
       else if (flow.kind !== 'confirm' && cfg.now >= DEADLINE) it.skip = 'after 15 January 2027: only confirmations';
       else if ((flow.form === 'A' || flow.form === 'S') && WANTS_STATUS[flow.kind] === 'in progress' && submitted[flow.form][to]) it.skip = 'same email already sent this form';
@@ -802,6 +804,42 @@ function emailLog(create) {
     if (mode === 'live' && r[8] === 'failed') out.failures[key] = (out.failures[key] || 0) + 1;
   });
   return out;
+}
+
+/* Bounces and spam complaints (Petr, 18 Nov 2026: pause the address and log it). Every live email sent through Resend has
+   Resend's id in column detail of "Email log". Each run asks Resend (GET /emails/<id>, needs a full-access key in script
+   property RESEND_READ_KEY; without it this check is off) how up to BOUNCE_CHECKS recent emails ended, and writes the answer
+   into column delivery: 'delivered' ends the check; 'bounced' or 'complained' also puts the address into tab Unsubscribed
+   with that source, which stops every email to it, confirmations included, and logs a row with status bounced or complained.
+   An email still on its way is asked again on a later run; one older than 3 days without an answer is marked 'not checked'. */
+var BOUNCE_CHECKS = 10, BOUNCE_DAYS = 3;
+function checkBounces(cfg) {
+  var key = PropertiesService.getScriptProperties().getProperty('RESEND_READ_KEY');
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(LOG_TAB);
+  if (!key || !sh || sh.getLastRow() < 2) return;
+  var head = addColumns(sh, header(sh), ['delivery']), col = {};
+  head.forEach(function (h, i) { col[h] = i; });
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, head.length).getValues(), asked = 0, unsub = unsubscribed(), found = [];
+  for (var i = 0; i < rows.length && asked < BOUNCE_CHECKS; i++) {
+    var r = rows[i], id = String(r[col.detail] || '');
+    if (r[col.mode] !== 'live' || r[col.status] !== 'sent' || r[col.delivery] !== '' || !/^[0-9a-f-]{36}$/.test(id)) continue;
+    if (!isDate(r[col.sent_at]) || cfg.now - r[col.sent_at] > BOUNCE_DAYS * DAY) { sh.getRange(i + 2, col.delivery + 1).setValue('not checked'); continue; }
+    var res = UrlFetchApp.fetch('https://api.resend.com/emails/' + id, { headers: { Authorization: 'Bearer ' + key }, muteHttpExceptions: true });
+    asked++;
+    if (res.getResponseCode() === 401 || res.getResponseCode() === 403) { console.error('RESEND_READ_KEY cannot read emails: ' + res.getResponseCode()); return; }
+    if (res.getResponseCode() !== 200) continue;
+    var ev = ''; try { ev = String(JSON.parse(res.getContentText()).last_event || ''); } catch (e) {}
+    if (ev === 'delivered' || ev === 'bounced' || ev === 'complained') sh.getRange(i + 2, col.delivery + 1).setValue(ev);
+    if (ev === 'bounced' || ev === 'complained') found.push({ to: lower(r[col.to]), ev: ev, r: r });
+    Utilities.sleep(400);       /* Resend allows 2 requests a second */
+  }
+  var us = ss.getSheetByName(UNSUB_TAB) || ss.insertSheet(UNSUB_TAB);
+  if (us.getLastRow() === 0) us.getRange(1, 1, 1, 3).setValues([['email', 'unsubscribed_at', 'source']]);
+  found.forEach(function (x) {
+    if (!unsub[x.to]) { us.getRange(us.getLastRow() + 1, 1, 1, 3).setValues([[x.to, new Date(), x.ev]]); unsub[x.to] = x.ev; }
+    logMail([new Date(), 'live', x.r[col.form], x.ev, x.r[col.response_id], x.to, '', x.r[col.subject], x.ev, 'Resend: ' + x.ev + '; no more emails to this address (tab Unsubscribed)']);
+    console.log('email ' + x.ev + ': ' + x.to);
+  });
 }
 
 function logMail(row) {
