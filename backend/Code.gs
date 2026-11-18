@@ -586,10 +586,12 @@ function sendOne(cfg, log, it) {
     ok = false; detail = String(err).slice(0, 300);
     console.error('mail failed: ' + key + ': ' + detail);
   }
-  logMail([when, cfg.mode, flow.form, flow.kind + (it.late ? ' (late)' : ''), rec.id, rec.to, targets.join(', '), subject, ok ? 'sent' : 'failed', detail]);
+  /* Resend's daily limit is not the address's fault: the email waits for the next run (logged 'deferred'), it never counts as a failed try */
+  var quota = !ok && /Resend 429/.test(detail);
+  logMail([when, cfg.mode, flow.form, flow.kind + (it.late ? ' (late)' : ''), rec.id, rec.to, targets.join(', '), subject, ok ? 'sent' : quota ? 'deferred' : 'failed', detail]);
   var book = live ? log.live : log.redirect;
   if (ok) { book[key] = when; book[flow.form + '|' + flow.kind + '|@' + lower(rec.to)] = when; (live ? log.liveLast : log.redirectLast)[lower(rec.to)] = when; }
-  if (live) {
+  if (live && !quota) {
     var tries = (log.failures[key] || 0) + (ok ? 0 : 1), col = rec.col[flow.kind + '_sent_at'];
     /* marked only on success, or after MAX_TRIES failures, so a passing error is retried on later runs and one bad address cannot block the queue */
     if (col !== undefined && ok) sh.getRange(rec.row, col + 1).setValue(when);
@@ -797,7 +799,7 @@ function emailLog(create) {
       if (isDate(at) && !(lastBook[a] >= at)) lastBook[a] = at;
     }
     if (sent && day(r[0]) === today) { out.sentToday += String(r[6]).split(',').length; out[mode === 'redirect' ? 'redirectToday' : 'liveToday'][lower(r[5])] = true; }
-    if (mode === 'live' && !sent) out.failures[key] = (out.failures[key] || 0) + 1;
+    if (mode === 'live' && r[8] === 'failed') out.failures[key] = (out.failures[key] || 0) + 1;
   });
   return out;
 }
