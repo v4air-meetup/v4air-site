@@ -234,7 +234,8 @@ function uniqueId(sh, prefix) {
 }
 
 /* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
-   whether they declined (address in Unsubscribed). Declined cards are wiped in place, so their details reach neither
+   whether they declined (their old row says declined, or the address is in Unsubscribed with source nominee-declined, which
+   the accept page writes; a plain unsubscribe only stops emails). Declined cards are wiped in place, so their details reach neither
    answers_json nor Nominees again. Same as the Worker's nomineePlan (backend-worker/src/index.js). */
 var NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
 function nomineePlan(nominationId, cards) {
@@ -252,7 +253,7 @@ function nomineePlan(nominationId, cards) {
   return cards.map(function (c) {
     var email = lower(c.contact), old = null;
     for (var i = 0; email && i < mine.length && !old; i++) if (lower(mine[i].contact) === email) old = mine[i];
-    var declined = !!email && !!unsub[email];
+    var declined = !!email && (unsub[email] === 'nominee-declined' || (!!old && old.decision === 'declined'));
     if (declined) { c.name = ''; c.contact = ''; c.affiliation = ''; c.why = ''; }
     return { old: old, declined: declined };
   });
@@ -345,7 +346,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -355,6 +356,8 @@ var NO_RESUME2_FROM = new Date('2027-01-05T09:00:00+01:00'); /* "skipped if a de
    Other test addresses: a row in the tab "Unsubscribed" with source "test" stops every email to that address, confirmations included. */
 var TEST_ADDRESS = /@example\.(com|net|org)$/i;
 var PREVIEW_TAB = 'Mail preview', UNSUB_TAB = 'Unsubscribed', LOG_TAB = 'Email log', NOMINEE_TAB = 'Nominees';
+/* requests to delete someone's details: rows (email, requested_at, source) written by the site, forwarded to the team */
+var DATA_TAB = 'Data requests', DATA_TO = 'data@v4air.eu';
 var LOG_HEAD = ['sent_at', 'mode', 'form', 'kind', 'response_id', 'to', 'sent_to', 'subject', 'status', 'detail'];
 var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -419,6 +422,7 @@ function sendMail() {
       var log = emailLog(true), limit = cfg.resend ? RESEND_DAILY - log.sentToday : MailApp.getRemainingDailyQuota();
       var items = dueMail(cfg, log).filter(function (it) { return !it.skip; }).slice(0, Math.max(0, Math.min(MAIL_BATCH, limit)));
       for (var i = 0; i < items.length; i++) if (!sendOne(cfg, log, items[i])) break;
+      notifyDataRequests(cfg, true);
       if (cfg.only) writePreview(cfg);
     }
     var today = Utilities.formatDate(cfg.now, 'Europe/Prague', 'yyyy-MM-dd');
@@ -612,7 +616,7 @@ function acceptLink(cfg, id) {
    The Doc is read once per run, so an edit there goes out from the next run on. An email whose text is missing or has an
    unknown placeholder, or lacks its link ({LINK}, or {ACCEPT_LINK} for nominees) or {UNSUBSCRIBE_LINK}, is not sent; the preview says why. */
 var EMAILS_DOC = '1EkQNlVa_DGdI5lYP727lhxpAr0XhKTinMEud09Y_g9g';
-var PLACEHOLDERS = ['NAME', 'ID', 'LINK', 'NOMINATE_LINK', 'UNSUBSCRIBE_LINK', 'SENT_DATE', 'STARTED_DATE', 'NOMINATOR', 'ACCEPT_LINK'];
+var PLACEHOLDERS = ['NAME', 'FIRST_NAME', 'ID', 'LINK', 'NOMINATE_LINK', 'UNSUBSCRIBE_LINK', 'SENT_DATE', 'STARTED_DATE', 'NOMINATOR', 'ACCEPT_LINK'];
 
 function loadEmails(id) {
   var out = {};
@@ -661,12 +665,14 @@ function emailText(cfg, it, link, unsubLink, acceptLinkText) {
   var utm = '?utm_source=forms-mail&utm_medium=email&utm_campaign=' + encodeURIComponent(tab.toLowerCase().replace(/\W+/g, '-'));
   var nominate = cfg.site + 'nominate/' + utm;
   var fill = {
-    ID: form === 'N' ? rec.nominationId : rec.id, UNSUBSCRIBE_LINK: unsubLink, SENT_DATE: dayText(rec.sent), STARTED_DATE: dayText(rec.started || rec.sent),
+    FIRST_NAME: firstName(rec.name), ID: form === 'N' ? rec.nominationId : rec.id, UNSUBSCRIBE_LINK: unsubLink, SENT_DATE: dayText(rec.sent), STARTED_DATE: dayText(rec.started || rec.sent),
     NOMINATE_LINK: nominate, NOMINATOR: rec.nominator || '', ACCEPT_LINK: acceptLinkText || '',
     LINK: form === 'A' && /^nominate/.test(it.flow.kind) ? nominate : form === 'A' || form === 'S' ? link : form === 'B' ? nominate : cfg.site + 'apply/' + utm
   };
   var put = function (s) {
+    var first = firstName(rec.name);
     s = s.replace(/ \{NAME\}/g, rec.name ? ' ' + rec.name : '').replace(/\{NAME\}/g, rec.name);
+    s = s.replace(/ \{FIRST_NAME\}/g, first ? ' ' + first : '').replace(/\{FIRST_NAME\}/g, first);
     return s.replace(/\{([A-Z_]+)\}/g, function (all, k) { return k in fill ? fill[k] : all; });
   };
   return { subject: put(t.subject), body: put(t.body) };
@@ -687,6 +693,13 @@ function asDate(x) {
   if (isDate(x)) return x;
   var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(x || ''));
   return m ? new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T' + ('0' + m[4]).slice(-2) + ':' + m[5] + ':' + (m[6] || '00') + '+01:00') : null;
+}
+
+/* "Mgr. Jana Nováková, Ph.D." -> "Jana": the first word that is not an academic title. Empty name -> ''. */
+var TITLE_RE = /^(prof|doc|dr|ing|mgr|bc|mudr|judr|phdr|rndr|paeddr|mvdr|thdr|ingr|arch|phd|csc|drsc|dsc|mba|msc|bsc|ma|ba)\.?$/i;
+function firstName(name) {
+  var words = String(name || '').replace(/,/g, ' ').trim().split(/\s+/).filter(function (w) { return w && !TITLE_RE.test(w.replace(/\.+$/, '')) && !/\.$/.test(w); });
+  return words[0] || String(name || '').trim();
 }
 
 function lower(s) { return String(s || '').trim().toLowerCase(); }
@@ -728,21 +741,22 @@ function logMail(row) {
 
 /* Nominee details are kept 30 days at most (privacy notice, site PR #39). Once a day this empties name, contact, affiliation
    and why in Nominees, and the nominee's card in the nomination's answers_json, exactly like the Worker's decline(), for:
-   - every nominee nominated more than 30 days ago who has no submitted application with the same address; decision
-     becomes 'expired' if it was empty, so an 'accepted' row keeps its consent record;
-   - every nominee whose address is in tab Unsubscribed (a "no" by email that a person put there, or a nomination sent again
-     after a decline); decision becomes 'declined' if it was empty.
+   - every nominee nominated more than 30 days ago who neither accepted nor applied (no submitted application with the same
+     address); decision becomes 'expired';
+   - a row marked 'declined' that still holds details (the accept page wipes at once; this only catches leftovers).
+   Unsubscribing never deletes anything (Petr, 18 Nov 2026): it only stops the emails. Requests to delete go to the team as
+   an internal email (notifyDataRequests).
    apply=false only lists them (dry-run preview). Returns [{rec, reason}]. */
 function purgeNominees(cfg, apply) {
   var recs = mailRecords('N').filter(function (r) { return !r.wiped; });
   if (!recs.length) return [];
-  var unsub = unsubscribed(), applied = {}, out = [];
+  var applied = {}, out = [];
   mailRecords('A').forEach(function (r) { if (r.status === 'submitted') applied[lower(r.to)] = true; });
   recs.forEach(function (r) {
     var to = lower(r.contact);
     if (cfg.only && !cfg.only(to)) return;
-    if (unsub[to]) out.push({ rec: r, reason: 'address in tab Unsubscribed', decision: 'declined' });
-    else if (isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS / DAY * dayMs(cfg, to) && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, not applied', decision: 'expired' });
+    if (r.decision === 'declined') out.push({ rec: r, reason: 'declined, details left over', decision: 'declined' });
+    else if (r.decision !== 'accepted' && isDate(r.saved) && cfg.now - r.saved > NOMINEE_KEEP_MS / DAY * dayMs(cfg, to) && !applied[to]) out.push({ rec: r, reason: 'nominated more than 30 days ago, neither accepted nor applied', decision: 'expired' });
   });
   if (!apply || !out.length) return out;
   var sh = mailSheet('N');
@@ -766,6 +780,42 @@ function purgeNominees(cfg, apply) {
   return out;
 }
 
+/* A request to delete someone's details never deletes anything by itself (Petr, 18 Nov 2026): each new row of the tab
+   "Data requests" (email, requested_at, source) becomes one internal email to DATA_REQUESTS_TO (default data@v4air.eu, which
+   reaches Petr and Peter), listing where the address appears; a person then deletes by hand. notified_at marks it sent.
+   Internal, so it goes in live and in test mode alike. apply=false only lists the emails (dry-run preview). */
+function notifyDataRequests(cfg, apply) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(DATA_TAB);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var head = addColumns(sh, header(sh), apply ? ['notified_at'] : []), col = {};
+  head.forEach(function (h, i) { col[h] = i; });
+  var to = PropertiesService.getScriptProperties().getProperty('DATA_REQUESTS_TO') || DATA_TO, out = [];
+  var where = function (addr) {
+    var lines = [];
+    [['A', 'Applications'], ['S', 'Speakers'], ['B', 'Nominations (as nominator)'], ['N', 'Nominees']].forEach(function (f) {
+      var ids = mailRecords(f[0]).filter(function (r) { return lower(f[0] === 'N' ? r.contact : r.to) === addr; })
+        .map(function (r) { return r.id + (r.status && f[0] !== 'N' ? ' (' + r.status + ')' : r.wiped ? ' (already empty)' : ''); });
+      if (ids.length) lines.push('- ' + f[1] + ': ' + ids.join(', '));
+    });
+    return lines.length ? lines.join('\n') : '- nowhere in the form tabs';
+  };
+  sh.getRange(2, 1, sh.getLastRow() - 1, head.length).getValues().forEach(function (r, i) {
+    var addr = lower(r[col.email]);
+    if (!addr || (col.notified_at !== undefined && r[col.notified_at] !== '')) return;
+    var when = isDate(r[col.requested_at]) ? Utilities.formatDate(r[col.requested_at], 'Europe/Prague', 'dd.MM.yyyy HH:mm') : String(r[col.requested_at] || '');
+    var m = { row: i + 2, to: to, subject: 'V4AIR data request: ' + addr,
+      body: addr + ' asked us to delete their details (' + when + ', ' + (r[col.source] || 'no source') + ').\n\n' +
+        'Where the address appears in the V4AIR forms Sheet:\n' + where(addr) + '\n\n' +
+        'Nothing has been deleted. Please delete these details by hand and reply to the person if they wrote to us.\n' +
+        (ss.getUrl ? ss.getUrl() + '\n' : '') };
+    out.push(m);
+    if (!apply) return;
+    try { deliver([to], m.subject, m.body, ''); sh.getRange(m.row, col.notified_at + 1).setValue(new Date()); }
+    catch (err) { console.error('data request email failed: ' + addr + ': ' + err); }
+  });
+  return out;
+}
+
 /* Dry run output: one row per due or skipped email, and one per nominee whose details the daily check would delete. */
 function writePreview(cfg) {
   var props = PropertiesService.getScriptProperties();
@@ -777,6 +827,9 @@ function writePreview(cfg) {
     var m = emailFor(cfg, it).t ? emailText(cfg, it, '<personal link, made at send time>', unsubscribeLink(rec.to) || '<unsubscribe link: UNSUB_SECRET is not set yet>',
       acceptLink(cfg, rec.id) || '<accept link: UNSUB_SECRET is not set yet>') : { subject: '', body: '' };
     rows.push([stamp, it.skip ? 'no' : 'yes', it.skip, it.flow.form, it.flow.kind, it.flow.tab, it.late ? 'yes' : '', rec.id, rec.to, from, m.subject, m.body]);
+  });
+  notifyDataRequests(cfg, false).forEach(function (x) {
+    rows.push([stamp, 'internal email', 'data request', 'R', 'notify', '', '', '', x.to, '', x.subject, x.body]);
   });
   purgeNominees(cfg, false).forEach(function (x) {
     rows.push([stamp, 'delete details', x.reason, 'N', 'purge', '', '', x.rec.id, x.rec.contact, '', '', '']);
@@ -796,7 +849,7 @@ function deliver(to, subject, body, unsubFor) {
     return 'gmail';
   }
   var msg = { from: MAIL_NAME + ' <' + (props.getProperty('RESEND_FROM') || RESEND_FROM) + '>', to: to, reply_to: MAIL_REPLY, subject: subject, text: body };
-  var unsub = unsubscribeLink(unsubFor);
+  var unsub = unsubFor ? unsubscribeLink(unsubFor) : '';
   /* RFC 8058 one-click: mail apps show an Unsubscribe button and POST to the link; the Worker accepts that POST */
   if (unsub) msg.headers = { 'List-Unsubscribe': '<' + unsub + '>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' };
   var res = UrlFetchApp.fetch('https://api.resend.com/emails', {
