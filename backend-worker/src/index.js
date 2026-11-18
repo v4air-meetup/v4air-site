@@ -84,11 +84,15 @@ const DATA_TAB = 'Data requests', DATA_HEAD = ['email', 'requested_at', 'source'
 async function dataRequest(g, env, e, t) {
   const email = decodeEmail(e);
   if (!email || !(await verifyUnsub(env, email, t))) return { ok: false, error: 'bad_link' };
+  await addDataRequest(g, email, 'unsubscribe page');
+  return { ok: true, email };
+}
+/* one row per address until the mailer has sent it on (notified_at); a second request before that adds nothing */
+async function addDataRequest(g, email, source) {
   await g.ensureTab(DATA_TAB, DATA_HEAD);
   const { head, rows } = await readTab(g, DATA_TAB), n = head.indexOf('notified_at');
   const open = rows.some(r => String(r[0]).trim().toLowerCase() === email && (n < 0 || !r[n]));
-  if (!open) await g.append(DATA_TAB, [[email, pragueNow(), 'unsubscribe page']]);
-  return { ok: true, email };
+  if (!open) await g.append(DATA_TAB, [[email, pragueNow(), source]]);
 }
 
 function decodeEmail(e) {
@@ -128,11 +132,11 @@ async function recordUnsub(g, email, source) {
      no decision    -> who nominated them and the current state (open / accepted / declined / gone)
      decision 'yes' -> consent recorded (decision, decided_at, decision_notice = privacy notice version); the page then
                        opens the application form
-     decision 'no'  -> the nominee's details are deleted at once (their cells in Nominees and their card in the
-                       nomination's answers_json), and the address goes to tab Unsubscribed with source nominee-declined,
-                       so nobody writes to them again. A plain unsubscribe stops emails only and deletes nothing.
+     decision 'no'  -> nothing is deleted: decision 'declined', the address goes to tab Unsubscribed with source
+                       nominee-declined (no more emails) and to tab Data requests (the team is told, no action needed).
+   Details of every nominee who neither accepted nor applied are deleted 30 days after the nomination (Code.gs).
    A nominee who does nothing is deleted 30 days after the nomination by the mailer (Code.gs), not here. */
-const NOM_TAB = 'Nominees', NOM_COLS = ['decision', 'decided_at', 'decision_notice'], NOM_WIPE = ['name', 'contact', 'affiliation', 'why'];
+const NOM_TAB = 'Nominees', NOM_COLS = ['decision', 'decided_at', 'decision_notice'];
 const NOM_ID_RE = /^(V4N-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4})\.([1-9])$/, NOTICE_RE = /^privacy-v[0-9]{1,3}$/;
 
 async function nomination(g, env, req) {
@@ -141,7 +145,7 @@ async function nomination(g, env, req) {
   let { head, rows } = await readTab(g, NOM_TAB);
   const i = rows.findIndex(r => String(r[0]) === m[1] && String(r[head.indexOf('n')]) === m[2]);
   const rec = i < 0 ? null : Object.fromEntries(head.map((h, k) => [h, rows[i][k] === undefined ? '' : rows[i][k]]));
-  if (!rec || (!rec.name && !rec.contact)) return { ok: true, state: rec && rec.decision === 'declined' ? 'declined' : 'gone' };
+  if (!rec || (!rec.name && !rec.contact)) return { ok: true, state: 'gone' }; /* emptied by the 30-day deletion */
   const state = rec.decision || 'open';
   if (!req.decision || state === 'declined') return { ok: true, state, name: String(rec.name), nominator: String(rec.nominator_name) };
   if (req.decision !== 'yes' && req.decision !== 'no') return { ok: false, error: 'bad_request' };
@@ -155,20 +159,15 @@ async function nomination(g, env, req) {
   return { ok: true, state: 'declined' };
 }
 
-/* wipes one nominee: their cells in Nominees, their card in the nomination's answers_json, plus a do-not-write entry */
+/* a "no" on the accept page deletes nothing (Petr, 18 Nov 2026): it records the decision, stops the emails and tells the
+   team through tab Data requests; the details go with the 30-day deletion (Code.gs purgeNominees) like everyone else's */
 async function decline(g, head, row, rec) {
   const email = String(rec.contact).trim().toLowerCase();
-  const set = { decision: 'declined', decided_at: pragueNow() };
-  NOM_WIPE.forEach(k => { set[k] = ''; });
-  await writeRecord(g, NOM_TAB, row, head, rec, set);
-  const noms = await readTab(g, 'Nominations'), j = noms.rows.findIndex(r => String(r[0]) === String(rec.nomination_id)), col = noms.head.indexOf('answers_json');
-  if (j >= 0 && col >= 0) {
-    let a = {};
-    try { a = JSON.parse(noms.rows[j][col] || '{}'); } catch (e) { a = {}; }
-    const c = (a.__cards || [])[+rec.n - 1];
-    if (c) { Object.assign(c, { name: '', contact: '', affiliation: '', why: '' }); await g.call('/values/' + encodeURIComponent(q('Nominations') + '!' + colName(col + 1) + (j + 2)) + '?valueInputOption=RAW', { method: 'PUT', body: JSON.stringify({ values: [[JSON.stringify(a)]] }) }); }
+  await writeRecord(g, NOM_TAB, row, head, rec, { decision: 'declined', decided_at: pragueNow() });
+  if (EMAIL_RE.test(email)) {
+    await recordUnsub(g, email, 'nominee-declined');                         /* stops the emails */
+    await addDataRequest(g, email, 'nominee declined on the accept page');   /* the team is told; no action needed */
   }
-  if (EMAIL_RE.test(email)) await recordUnsub(g, email, 'nominee-declined');
 }
 
 async function readTab(g, tab) {
@@ -246,8 +245,8 @@ async function save(g, req) {
   }
   set.last_saved_at = now;
   set.screen = typeof req.answers.__screen === 'number' ? req.answers.__screen : '';
-  /* a nomination sent again: nominees who declined or unsubscribed are wiped before anything is written, and the others
-     keep what the sheet already knows about them (decision, mailer columns, saved_at); see nomineePlan */
+  /* a nomination sent again: every nominee keeps what the sheet already knows about them (decision, mailer columns,
+     saved_at); see nomineePlan */
   let plan = null;
   if (req.form === 'B' && (req.final || old.status === 'submitted')) plan = await nomineePlan(g, row ? id : '', answers.json.__cards || []);
   set.answers_json = JSON.stringify(answers.json);
@@ -267,9 +266,8 @@ async function save(g, req) {
 }
 
 /* Before a nomination is (re)written: for each card, the nominee's old Nominees row (same nomination, same address) and
-   whether they declined (decision 'declined', or the address in Unsubscribed with source nominee-declined, which only a
-   "no" on the nomination page writes). Declined cards are wiped in place, so their
-   details reach neither answers_json nor Nominees again. */
+   whether they declined (their old row says declined, or the address is in Unsubscribed with source nominee-declined,
+   which only a "no" on the nomination page writes). Nothing is wiped: a declined nominee keeps decision 'declined'. */
 const NOM_DATA = ['nomination_id', 'application_id', 'nominator_name', 'nominator_email', 'n', 'type', 'name', 'contact', 'affiliation', 'why'];
 async function nomineePlan(g, nominationId, cards) {
   if (!cards.length) return [];
@@ -282,7 +280,6 @@ async function nomineePlan(g, nominationId, cards) {
     const email = String(c.contact || '').trim().toLowerCase();
     const old = email ? mine.find(r => String(r.contact).trim().toLowerCase() === email) || null : null;
     const declined = !!email && (declinedAddr.has(email) || (!!old && old.decision === 'declined'));
-    if (declined) Object.assign(c, { name: '', contact: '', affiliation: '', why: '' });
     return { head, old, declined };
   });
 }
