@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'  # daily, so new applicants get their share images (scripts/share-images)
 
 permissions:
   contents: read
@@ -25,6 +27,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Personal share images (QR code per applicant) are built into dist/share only, never committed.
+      # Without the TWENTY_API_KEY secret the script prints a notice and skips.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pillow qrcode
+      - run: python scripts/share-images/make_share_images.py --out dist/share
+        env:
+          TWENTY_API_KEY: ${{ secrets.TWENTY_API_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

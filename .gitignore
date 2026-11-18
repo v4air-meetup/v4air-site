@@ -35,3 +35,6 @@ src/people-page/
 people-src/
 dist-people/
 .staticrypt.json
+
+# local output of scripts/share-images (the deploy writes to dist/share)
+/out/
