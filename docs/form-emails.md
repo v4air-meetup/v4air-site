@@ -11,7 +11,7 @@ Reference for people and agents. The mailer is `sendMail` in `backend/Code.gs`; 
 | One email | One tab. Tab name = email name, exactly (table below). Child tabs are read too. |
 | Tab text | Optional lines first (e.g. the "Sent:" rule, ignored). Then one line `Subject: <subject>`. Everything after it is the body, as plain text. |
 | Ignored tabs | Any tab without a `Subject:` line (e.g. "How it works"). |
-| Placeholders | Single braces, filled per person: `{NAME}` `{ID}` `{LINK}` `{NOMINATE_LINK}` `{UNSUBSCRIBE_LINK}` `{SENT_DATE}` `{STARTED_DATE}` `{NOMINATOR}` `{ACCEPT_LINK}`. Any other `{WORD}` blocks that email. |
+| Placeholders | Single braces, filled per person: `{NAME}` (full name) `{FIRST_NAME}` (first word that is not an academic title, used in greetings) `{ID}` `{LINK}` `{NOMINATE_LINK}` `{UNSUBSCRIBE_LINK}` `{SENT_DATE}` `{STARTED_DATE}` `{NOMINATOR}` `{ACCEPT_LINK}`. Any other `{WORD}` blocks that email. |
 | `{LINK}` | Applications and speakers: the personal link to their form. Nomination confirmation and nominate reminders: the nominate page. Nominee emails: the apply page. |
 | Required | Body has `{UNSUBSCRIBE_LINK}` and `{LINK}` (nominee emails: `{ACCEPT_LINK}` instead). Subject not empty. |
 | Broken text | That email is not sent; tab "Mail preview" (dry run) shows why. Doc unreadable: nothing is sent. |
@@ -38,8 +38,13 @@ Tab names the mailer uses, in priority order (one email per person per day: the 
 | Nominate reminder 3 | nominate3 | same | 28 days after applying |
 
 For every email: not to unsubscribed addresses (confirmations excepted) or test addresses; nothing but confirmations after
-15 January 2027; each reminder once per address; rows saved before go-live count as saved at go-live. Nominee details are
-deleted after 30 days by the daily check (`purgeNominees`), in live mode or with `NOMINEE_PURGE=true`.
+15 January 2027; each reminder once per address; rows saved before go-live count as saved at go-live.
+
+Data (Petr, 18 Nov 2026): unsubscribing only stops emails and never deletes anything. Nominee details are deleted by the daily
+check (`purgeNominees`, live mode or `NOMINEE_PURGE=true`) 30 days after the nomination if the nominee neither accepted nor
+applied; a decline on the accept page deletes at once (Worker). Everything else is kept for the retention period. A request to
+delete someone's details is a row in tab "Data requests" (email, requested_at, source); the mailer sends each new one once as an
+internal email to `DATA_REQUESTS_TO` (default data@v4air.eu) listing where the address appears, and a person deletes by hand.
 
 Test mode (live mail to test addresses only): `MAIL_MODE=live` plus `MAIL_ONLY` (comma separated, `*` matches any text,
 e.g. `chlupp+*@natur.cuni.cz`) sends real emails with working links to those addresses only; every other row stays untouched

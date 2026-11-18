@@ -207,7 +207,8 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   check('nothing more after the chains end', t.sent.length === n, since(n));
   day(31);
   const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards || [];
-  check('day 31: nominee details deleted, accepted keeps its decision, the applicant\'s nominee row stays', !nom[0].name && !nom[0].contact && nom[0].decision === 'accepted' && !nom[1].contact && nom[1].decision === 'expired' && nom[2].contact === 'applied@uni.cz' && !card[0].contact && !card[1].contact && card[2].contact === 'applied@uni.cz', nom.map(r => [r.name, r.contact, r.decision]));
+  check('day 31: the undecided nominee is deleted; the one who accepted and the one who applied are kept', nom[0].contact === 'nick@uni.cz' && nom[0].decision === 'accepted' && !nom[1].contact && nom[1].decision === 'expired' && nom[2].contact === 'applied@uni.cz' && card[0].contact === 'nick@uni.cz' && !card[1].contact && card[2].contact === 'applied@uni.cz', nom.map(r => [r.name, r.contact, r.decision]));
+  check('greetings use the first name', /^Hello Ana,/m.test(t.sent.find(m => m.to[0] === 'app@uni.cz').body) && /^Hello Nick,/m.test(inv.body), [t.sent[0].body.slice(0, 40), inv.body.slice(0, 40)]);
   check('every email went at most once per form, kind and address', new Set(rows(t.book, 'Email log').map(r => r.form + r.kind + r.to)).size === rows(t.book, 'Email log').length, rows(t.book, 'Email log').map(r => r.kind + ' ' + r.to));
 }
 
@@ -260,15 +261,18 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
       ['V4N-RESB-CCCC', '', 'Ana', 'app@uni.cz', 2, 'researcher', 'Nick', 'nick@uni.cz', 'X', 'good', at(-5), 'accepted', at(-5)]
     ]);
   };
-  const t = setup({}, { seed, unsub: ['dee@uni.cz'] });
+  const t = setup({}, { seed, unsub: ['plain@uni.cz'] });
+  t.book.tab('Unsubscribed').rows.push(['dee@uni.cz', '', 'nominee-declined']);
   t.book.tab('Nominations').rows[1][1] = t.ctx.hash('tok-1');
   const r = t.ctx.save({ form: 'B', id: 'V4N-RESB-CCCC', token: 'tok-1', final: true, answers: { 'B.name': 'Ana', 'B.email': 'app@uni.cz',
-    __cards: [{ type: 'researcher', name: 'Nick', contact: 'nick@uni.cz', affiliation: 'X', why: 'good' }, { type: 'researcher', name: 'Dee', contact: 'dee@uni.cz', affiliation: 'Q', why: 'w' }] } });
+    __cards: [{ type: 'researcher', name: 'Nick', contact: 'nick@uni.cz', affiliation: 'X', why: 'good' }, { type: 'researcher', name: 'Dee', contact: 'dee@uni.cz', affiliation: 'Q', why: 'w' }, { type: 'researcher', name: 'Pia', contact: 'plain@uni.cz', affiliation: 'P', why: 'p' }] } });
   const nom = rows(t.book, 'Nominees'), card = JSON.parse(rows(t.book, 'Nominations')[0].answers_json).__cards || [];
   const nick = nom.find(x => x.contact === 'nick@uni.cz'), dee = nom.find(x => x.n === 2);
   check('resubmitted nomination: saved', r.ok === true, r);
   check('resubmitted nomination: the accepted nominee keeps decision, sent mark and 30-day clock', !!nick && nick.decision === 'accepted' && nick.invite_sent_at !== '' && Math.abs(nick.saved_at - at(-5)) < 1e-6, nick);
   check('resubmitted nomination: the declined nominee comes back wiped, in Nominees and answers_json', !!dee && !dee.name && !dee.contact && dee.decision === 'declined' && !card[1].contact && !card[1].name, [dee, card[1]]);
+  const pia = nom.find(x => x.n === 3);
+  check('resubmitted nomination: a plain unsubscribe does not wipe anyone', !!pia && pia.contact === 'plain@uni.cz' && card[2].contact === 'plain@uni.cz' && !pia.decision, pia);
 }
 /* 12. test mode: only MAIL_ONLY addresses get anything, on short "days"; real rows are left exactly as they are */
 {
@@ -303,6 +307,23 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const nom = rows(t.book, 'Nominees');
   check('test mode: the test nominee is deleted after 30 short days, the real old nominee is not touched', !nom[0].contact && nom[0].decision === 'expired' && nom[1].contact === 'old-real@uni.cz' && !nom[1].decision, nom.map(r => [r.contact, r.decision]));
   check('test mode: nothing ever went to a real address', t.sent.every(m => /^chlupp\+/.test(m.to[0])), t.sent.map(m => m.to[0]));
+}
+/* 13. unsubscribing never deletes; a data request becomes one internal email to data@v4air.eu */
+{
+  const T0 = Date.UTC(2026, 10, 20, 9, 0), at = d => serial(new Date(T0 + d * DAY));
+  const seed = book => {
+    book.seed('Applications', HEAD, [['V4A-KEEP-AAAA', 'h1', 'submitted', at(-2), at(-2), at(-2), '', '{}', 'Kim', 'kim@uni.cz']]);
+    book.seed('Speakers', HEAD, []);
+    book.seed('Nominations', ['response_id', 'status', 'answers_json'], []);
+    book.seed('Nominees', ['nomination_id', 'n', 'name', 'contact', 'nominator_name', 'saved_at'], [['V4N-KEEP-BBBB', 1, 'Kim', 'kim@uni.cz', 'Ana', at(-2)]]);
+    book.seed('Data requests', ['email', 'requested_at', 'source'], [['kim@uni.cz', at(-0.01), 'unsubscribe page']]);
+  };
+  const t = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's', RESEND_API_KEY: 'k', MAIL_START: new Date(T0 - 5 * DAY).toISOString() }, { seed, unsub: ['kim@uni.cz'], clock: { now: T0 } });
+  t.run(); t.run();
+  const internal = t.sent.filter(m => m.to[0] === 'data@v4air.eu');
+  check('unsubscribed: no email to the person, nothing deleted', !t.sent.some(m => m.to[0] === 'kim@uni.cz' && !/We received/.test(m.subject)) && rows(t.book, 'Nominees')[0].contact === 'kim@uni.cz' && rows(t.book, 'Applications').length === 1, t.sent.map(m => m.to[0] + ' ' + m.subject));
+  check('data request: one internal email to data@v4air.eu listing where the address is', internal.length === 1 && /V4A-KEEP-AAAA/.test(internal[0].body) && /V4N-KEEP-BBBB.1/.test(internal[0].body) && /Nothing has been deleted/.test(internal[0].body) && !internal[0].headers, internal.map(m => m.body));
+  check('data request: marked, not sent twice', rows(t.book, 'Data requests')[0].notified_at !== '', rows(t.book, 'Data requests')[0]);
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
