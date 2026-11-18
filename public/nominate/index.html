@@ -378,7 +378,7 @@
       <div class="q" data-q="B.email">
         <label class="qlabel" for="B.email">Your email</label>
         <input type="email" id="B.email" name="B.email" autocomplete="email" inputmode="email">
-        <p class="err-msg">Enter an email address we can reach you at</p>
+        <p class="err-msg">Enter an email address we can reach you at. It cannot contain letters with accents, such as ł or á.</p>
       </div>
       <div class="q" data-q="B.institution">
         <label class="qlabel" for="B.institution">Your institution or organization <span class="opt-mark">(optional)</span></label>
@@ -601,7 +601,7 @@
   /* validation */
   var validators = {
     'B.name': function () { return byId('B.name').value.trim() ? '' : 'Your name'; },
-    'B.email': function () { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(byId('B.email').value.trim()) ? '' : 'Your email'; },
+    'B.email': function () { return /^[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+$/.test(byId('B.email').value.trim()) ? '' : 'Your email'; },
     'B.application_id': function () { var v = byId('B.application_id').value.trim(); return (!v || ID_RE.test(v)) ? '' : 'Application ID'; },
     'B4': function () {
       var bad = false;

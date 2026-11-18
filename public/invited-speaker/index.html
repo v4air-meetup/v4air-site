@@ -169,7 +169,7 @@
       <label class="qlabel" for="A1.email">Email</label>
       <p class="hint">We use it only to write to you about the meetup</p>
       <input type="email" id="A1.email" name="A1.email" autocomplete="email" inputmode="email">
-      <p class="err-msg">Enter an email address we can reach you at</p>
+      <p class="err-msg">Enter an email address we can reach you at. It cannot contain letters with accents, such as ł or á.</p>
     </div>
     <div class="q" data-q="A1.institution_name" data-err="Institution or organization">
       <label class="qlabel" for="A1.institution_name">Affiliation</label>
@@ -533,7 +533,7 @@
   });
 
   /* ---------- validation ---------- */
-  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  var EMAIL_RE = /^[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+$/;
   function val(name) { var el = form.elements[name]; return el ? String(el.value || '').trim() : ''; }
   function ticked(sel) { return $$(sel, form).some(function (el) { return el.checked; }); }
   var RULES = {
