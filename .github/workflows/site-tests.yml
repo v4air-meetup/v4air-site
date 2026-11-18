@@ -32,7 +32,10 @@ jobs:
           node-version: 22
       - name: Install test tools
         run: npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: Forms mailer test (dry run, redirect, live, retries; nothing is sent)
+        run: npm run mail
       - name: Forms data test (answers land in the right Sheet columns, old data unchanged)
+        if: always()
         run: npm run forms
       - name: Site check (no page errors or broken links, copy rules, phone width)
         if: always()
