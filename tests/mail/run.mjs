@@ -28,7 +28,7 @@ const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Erro
 /* a Date the mailer sees: new Date() without arguments is clock.now */
 const clockDate = clock => class extends Date { constructor(...a) { if (a.length) super(...a); else super(clock.now); } static now() { return clock.now; } };
 
-function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [], seed, clock } = {}) {
+function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [], seed, clock, events = {} } = {}) {
   const props = { EMAILS_UPTAKE: 'test-1', ...props0 }; /* every test takes the texts in first */
   const book = new Book();
   if (seed) seed(book); else book.seed('Applications', HEAD, [
@@ -51,7 +51,7 @@ function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false,
       newBlob: s => ({ getBytes: () => [...Buffer.from(s)] }),
       base64EncodeWebSafe: x => Buffer.from(Array.isArray(x) ? x.map(b => b & 255) : x).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
       computeHmacSha256Signature: (v, k) => [...createHmac('sha256', k).update(v).digest()].map(b => (b > 127 ? b - 256 : b)),
-      formatDate: (d, tz, pattern) => prague(d, pattern)
+      formatDate: (d, tz, pattern) => prague(d, pattern), sleep() {}
     },
     DocumentApp: docApp(doc, brokenDoc),
     DriveApp: {
@@ -61,8 +61,10 @@ function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false,
     MailApp: { getRemainingDailyQuota: () => 100 },
     GmailApp: { sendEmail: (to, subject, body) => sent.push({ via: 'gmail', to: to.split(','), subject, body }) },
     UrlFetchApp: {
-      fetch: (url, o) => { const m = JSON.parse(o.payload); sent.push({ via: 'resend', ...m, body: m.text });
-        const code = typeof resend === 'function' ? resend() : resend; return { getResponseCode: () => code, getContentText: () => (code === 200 ? '{"id":"re_1"}' : 'error') }; }
+      fetch: (url, o) => {
+        if (!o || !o.payload) { const id = url.split('/').pop(); return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ last_event: events[id] || 'sent' }) }; }   /* GET /emails/<id> */
+        const m = JSON.parse(o.payload), id = randomUUID(); sent.push({ via: 'resend', ...m, body: m.text, id });
+        const code = typeof resend === 'function' ? resend() : resend; return { getResponseCode: () => code, getContentText: () => (code === 200 ? JSON.stringify({ id }) : 'error') }; }
     }
   }));
   vm.runInContext(readFileSync(path.join(ROOT, 'backend/Code.gs'), 'utf8'), ctx);
@@ -356,6 +358,22 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   const stray = by(rows(u2.book, 'Mail preview'), 'V4A-NEW1-AAAA')[0];
   check('text above the Subject line: the uptake is refused with the reason, nothing goes', stray.would_send === 'no' && /text above the Subject line/.test(rows(u2.book, 'Email texts')[0].result), rows(u2.book, 'Email texts')[0].result);
   check('tab names match without punctuation', t.ctx.tabKey('Deadline reminder: 1 week') === t.ctx.tabKey('Deadline reminder 1 week') && t.ctx.tabKey('Application confirmation (late)') === 'applicationconfirmationlate', '');
+}
+/* 15. bounces and complaints: the address is paused (no more emails, confirmations included) and the outcome is logged */
+{
+  const events = {};
+  const t = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', MAIL_KINDS: 'confirm', UNSUB_SECRET: 's', RESEND_API_KEY: 'k', RESEND_READ_KEY: 'full' }, { events });
+  t.run();
+  const old = t.sent.find(m => m.to[0] === 'old@uni.cz'), fresh = t.sent.find(m => m.to[0] === 'new@uni.cz');
+  events[old.id] = 'bounced'; events[fresh.id] = 'delivered';
+  t.run();
+  const log = rows(t.book, 'Email log'), un = rows(t.book, 'Unsubscribed');
+  check('bounce: the address goes to Unsubscribed as bounced, a bounce row is logged, delivery noted', un.some(r => r.email === 'old@uni.cz' && r.source === 'bounced') && log.some(r => r.status === 'bounced' && r.to === 'old@uni.cz') && log.some(r => r.to === 'new@uni.cz' && r.delivery === 'delivered') && log.some(r => r.to === 'old@uni.cz' && r.delivery === 'bounced'), log.map(r => [r.to, r.status, r.delivery]));
+  t.book.tab('Applications').rows.push(['V4A-OLD2-AAAA', 'h9', 'submitted', serial(new Date()), serial(new Date()), serial(new Date()), '', '{}', 'Olga', 'old@uni.cz']);
+  const n = t.sent.length; t.run(); t.run();
+  check('bounce: nothing more goes to that address, not even a confirmation of a new form', !t.sent.slice(n).some(m => m.to[0] === 'old@uni.cz'), t.sent.slice(n).map(m => m.to[0]));
+  const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', MAIL_KINDS: 'confirm', UNSUB_SECRET: 's', RESEND_API_KEY: 'k' }, { events }); u.run(); u.run();
+  check('bounce: without RESEND_READ_KEY the check is off and nothing breaks', !rows(u.book, 'Email log').some(r => r.delivery), rows(u.book, 'Email log').length);
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
