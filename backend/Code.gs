@@ -345,7 +345,7 @@ var RESEND_FROM = 'info@v4air.eu', RESEND_DAILY = 100;
    count, never a file someone else shares, and only the keys listed here are accepted; an empty value removes the property. */
 var SECRETS_FILE = 'v4air-script-secrets.json';
 var SECRET_KEYS = ['RESEND_API_KEY', 'UNSUB_SECRET', 'RESEND_FROM', 'EMAIL_ENABLED', 'MAIL_MODE', 'MAIL_KINDS', 'MAIL_REDIRECT', 'MAIL_START',
-  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE', 'RESEND_READ_KEY'];
+  'EMAILS_DOC_ID', 'SETTINGS_FOLDER_ID', 'NOMINEE_PURGE', 'MAIL_ONLY', 'MAIL_TEST_DAY_MINUTES', 'DATA_REQUESTS_TO', 'EMAILS_UPTAKE', 'RESEND_READ_KEY', 'MAIL_QUIET_HOURS'];
 var MAIL_BATCH = 5; /* the script lock is held during a run, and saves through Apps Script wait for it at most 20 s */
 var HOUR = 60 * 60 * 1000, DAY = 24 * HOUR, LATE_MS = 3 * DAY, MAX_TRIES = 3, NOMINEE_KEEP_MS = 30 * DAY;
 var DEADLINE = new Date('2027-01-16T00:00:00+01:00'); /* applications close on 15 January 2027: after it only confirmations go out */
@@ -397,6 +397,7 @@ var WANTS_STATUS = { confirm: 'submitted', resume: 'in progress', resume2: 'in p
    Redirect and live also need EMAIL_ENABLED=true and UNSUB_SECRET. MAIL_KINDS (comma separated kinds from FLOWS, e.g. 'confirm'
    or 'confirm, resume'; unset = all) switches kinds on one at a time. Backlog: a row saved before MAIL_START counts as saved
    at MAIL_START, so earlier applicants get their confirmation on day 0 and reminders count from go-live.
+   Quiet hours: MAIL_QUIET_HOURS ('8-20' by default, Prague time; 'off' = none) holds every kind except confirmations outside them.
    Nominee details: deleted once a day by purgeNominees in live mode, or when NOMINEE_PURGE=true. Texts: see loadEmails.
    Test mode: MAIL_ONLY (comma separated addresses, * matches any text, e.g. "chlupp+*@natur.cuni.cz") limits every email
    and the nominee deletion to those addresses; all other rows stay as they are, MAIL_START is not stored and "Mail preview"
@@ -457,9 +458,12 @@ function mailConfig(props) {
   kinds.forEach(function (k) { on[k] = true; });
   var res = only.map(function (x) { return new RegExp('^' + x.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$'); });
   var minutes = +p('MAIL_TEST_DAY_MINUTES');
+  var quiet = (p('MAIL_QUIET_HOURS') || '8-20').toLowerCase(), qh = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(quiet);
+  if (quiet !== 'off' && !qh) { console.error('MAIL_QUIET_HOURS=' + quiet + ' is not like 8-20: using 8-20'); qh = [0, 8, 20]; }
   var cfg = { site: site, mode: mode, kinds: kinds.length ? on : null, redirect: redirect, start: start, now: new Date(), resend: !!p('RESEND_API_KEY'),
     only: res.length ? function (to) { to = lower(to); return res.some(function (r) { return r.test(to); }); } : null,
     testDay: res.length && minutes > 0 ? minutes * 60 * 1000 : 0,
+    quiet: qh ? [+qh[1], +qh[2]] : null,
     secret: p('UNSUB_SECRET'), emails: {}, textError: '' };
   cfg.emails = takenEmails(props);
   if (!Object.keys(cfg.emails).length) cfg.textError = 'no email texts taken in yet (run the uptake: v4air-site scripts/emails-uptake.py)';
@@ -506,6 +510,7 @@ function mailRecords(form) {
    Emails that already went, that wait for an earlier email of their chain, or whose date window has not opened are not listed. */
 function dueMail(cfg, log) {
   var unsub = unsubscribed(), recs = {}, items = [];
+  var hour = +Utilities.formatDate(cfg.now, 'Europe/Prague', 'HH'), quiet = cfg.quiet && (hour < cfg.quiet[0] || hour >= cfg.quiet[1]);
   ['A', 'S', 'B', 'N'].forEach(function (f) { recs[f] = mailRecords(f); });
   var submitted = { A: {}, S: {} }, nominated = {};
   ['A', 'S'].forEach(function (f) { recs[f].forEach(function (r) { if (r.status === 'submitted') submitted[f][lower(r.to)] = true; }); });
@@ -538,6 +543,7 @@ function dueMail(cfg, log) {
       else if (flow.form === 'N' && submitted.A[to]) it.skip = 'already applied';
       else if (flow.after && !base) it.skip = 'no date to count from';
       else if (flow.after && cfg.now - base < flow.after * D) it.skip = 'not yet: due ' + Utilities.formatDate(new Date(+base + flow.after * D), 'Europe/Prague', 'dd.MM.yyyy HH:mm');
+      else if (quiet && flow.kind !== 'confirm') it.skip = 'quiet hours: waits until ' + (cfg.quiet[0] < 10 ? '0' : '') + cfg.quiet[0] + ':00 Prague time';
       else if (problem) it.skip = problem;
       else if (cfg.kinds && !cfg.kinds[flow.kind]) it.skip = 'kind not switched on (MAIL_KINDS)';
       items.push(it);
