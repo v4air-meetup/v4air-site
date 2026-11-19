@@ -29,7 +29,7 @@ const docApp = (tabs, broken) => ({ openById: () => { if (broken) throw new Erro
 const clockDate = clock => class extends Date { constructor(...a) { if (a.length) super(...a); else super(clock.now); } static now() { return clock.now; } };
 
 function setup(props0, { resend = 200, unsub = [], doc = DOC, brokenDoc = false, folderFiles = [], seed, clock, events = {} } = {}) {
-  const props = { EMAILS_UPTAKE: 'test-1', ...props0 }; /* every test takes the texts in first */
+  const props = { EMAILS_UPTAKE: 'test-1', MAIL_QUIET_HOURS: 'off', ...props0 }; /* every test takes the texts in first; quiet hours tested on their own */
   const book = new Book();
   if (seed) seed(book); else book.seed('Applications', HEAD, [
     ['V4A-OLD1-AAAA', 'h1', 'submitted', ago(31), ago(30), ago(30), '', '{}', 'Olga', 'old@uni.cz'],
@@ -374,6 +374,19 @@ const by = (rs, id) => rs.filter(r => r.response_id === id);
   check('bounce: nothing more goes to that address, not even a confirmation of a new form', !t.sent.slice(n).some(m => m.to[0] === 'old@uni.cz'), t.sent.slice(n).map(m => m.to[0]));
   const u = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', MAIL_KINDS: 'confirm', UNSUB_SECRET: 's', RESEND_API_KEY: 'k' }, { events }); u.run(); u.run();
   check('bounce: without RESEND_READ_KEY the check is off and nothing breaks', !rows(u.book, 'Email log').some(r => r.delivery), rows(u.book, 'Email log').length);
+}
+/* 16. quiet hours: outside 08-20 Prague time only confirmations go; the rest waits for the morning */
+{
+  const clock = { now: Date.parse('2026-11-20T22:30:00Z') }; /* 23:30 in Prague */
+  const t = setup({ EMAIL_ENABLED: 'true', MAIL_MODE: 'live', UNSUB_SECRET: 's', RESEND_API_KEY: 'k', MAIL_QUIET_HOURS: '', MAIL_START: '2026-11-01T00:00:00Z' }, { clock });
+  t.run(); t.run();
+  const night = t.sent.map(m => m.to[0]);
+  check('quiet hours (default 8-20): at night confirmations go, the draft reminder waits', night.includes('new@uni.cz') && !night.includes('draft@uni.cz'), night);
+  check('quiet hours: a held email is not logged as failed', !rows(t.book, 'Email log').some(r => r.status === 'failed'), '');
+  clock.now = Date.parse('2026-11-21T07:05:00Z'); t.run(); /* 08:05 in Prague */
+  check('quiet hours: in the morning the reminder goes', t.sent.some(m => m.to[0] === 'draft@uni.cz'), t.sent.map(m => m.to[0]));
+  const d = setup({ MAIL_QUIET_HOURS: '', MAIL_START: '2026-11-01T00:00:00Z' }, { clock: { now: Date.parse('2026-11-20T22:30:00Z') } }); d.run();
+  check('quiet hours: the preview gives the reason', by(rows(d.book, 'Mail preview'), 'V4A-DRF1-AAAA').some(r => /quiet hours: waits until 08:00/.test(r.skip_reason)), by(rows(d.book, 'Mail preview'), 'V4A-DRF1-AAAA'));
 }
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
