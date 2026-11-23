@@ -179,17 +179,37 @@
   })
 
   /* ---------- "Should you apply?": X and Y rotate as matched pairs, 3.5 s each, no pause on hover or focus ---------- */
-  var PAIRS = [
-    ['a biologist training models on field data', 'your daily tool'],
-    ['a sociologist studying how people use chatbots', 'your research subject'],
-    ['a PhD student building new architectures', 'your whole field'],
-    ['a linguist probing what models learn', 'your object of study'],
-    ['an economist forecasting with neural nets', 'your unfair advantage'],
-    ['a historian mining digitized archives', 'your reading assistant'],
-    ['a medical researcher classifying scans', 'your second opinion'],
-    ['a chemist screening candidate molecules', 'your lab partner'],
-    ['a lawyer-to-be studying algorithmic decisions', 'your case study'],
-    ['a master’s student who just met LLMs', 'your next step'],
+  var PAIRS = [   // carousel pairs picked by Petr, 23 Nov 2026; no two neighbours (also last/first) from one audience segment
+    ["a radiologist outlining tumors on MRI scans", "your second pair of eyes"],   // image
+    ["a psychologist transcribing speech recordings", "your transcriber"],   // text
+    ["a researcher speeding up MRI scans", "your scan sharpener"],   // image
+    ["a scholar digitizing handwritten manuscripts", "your patient copyist"],   // text
+    ["an ecologist identifying birds by their song", "your tireless listener"],   // nodata
+    ["a biologist outlining cells in microscope images", "your untiring colleague"],   // image
+    ["a neuroscientist decoding EEG recordings", "your puzzle solver"],   // signals
+    ["a biologist searching for similar proteins", "your matchmaker"],   // omics
+    ["a lawyer-to-be studying algorithmic decisions", "your case study"],   // general
+    ["a surgeon measuring wounds from photos", "your tape measure"],   // image
+    ["a psychiatrist analyzing patients' speech", "your careful ear"],   // appliers
+    ["a sociologist studying how people use chatbots", "your research subject"],   // text
+    ["a botanist counting fruit in photos", "your patient counter"],   // image
+    ["an ecologist with thirty years of bird counts", "still a question mark"],   // nodata
+    ["a radiologist segmenting tumours on MRI", "your extra pair of eyes"],   // image
+    ["a hydrologist forecasting river levels", "your early warning"],   // signals
+    ["a linguist probing what models learn", "your object of study"],   // text
+    ["a chemist screening candidate molecules", "your lab partner"],   // omics
+    ["a PhD student building new methods", "your whole field"],   // general
+    ["a geographer mapping land from satellites", "your field assistant"],   // image
+    ["a zoologist mapping where a species can live", "your crystal ball"],   // nodata
+    ["an ecologist counting animals in camera traps", "your field assistant"],   // image
+    ["a historian mining digitized archives", "your reading assistant"],   // text
+    ["a forester outlining trees in aerial images", "your tree counter"],   // image
+    ["a cardiologist screening ECGs for arrhythmia", "your second reader"],   // appliers
+    ["an economist forecasting with neural nets", "your unfair advantage"],   // signals
+    ["a plant breeder predicting hybrid yield", "your forecaster"],   // omics
+    ["a master’s student who just met LLMs", "your next step"],   // general
+    ["a forester mapping tree species from satellite", "your botanist"],   // image
+    ["an entomologist measuring bugs in photos", "your saviour"],   // nodata
   ]
   var who = $('.who-doubt:not(.who-then)')
   if (who && M) {
