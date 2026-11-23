@@ -194,7 +194,6 @@
     ["a sociologist studying how people use chatbots", "your research subject"],   // text
     ["a botanist counting fruit in photos", "your patient counter"],   // image
     ["an ecologist with thirty years of bird counts", "still a question mark"],   // nodata
-    ["a radiologist segmenting tumours on MRI", "your extra pair of eyes"],   // image
     ["a hydrologist forecasting river levels", "your early warning"],   // signals
     ["a linguist probing what models learn", "your object of study"],   // text
     ["a chemist screening candidate molecules", "your lab partner"],   // omics
@@ -211,6 +210,16 @@
     ["a forester mapping tree species from satellite", "your botanist"],   // image
     ["an entomologist measuring bugs in photos", "your saviour"],   // nodata
   ]
+  /* One joke (Petr, 23 Nov 2026), rarer than the serious pairs: each loop it shows once with probability JOKE_ODDS, at a random
+     place after the first five pairs, or not at all. */
+  var JOKE = ['a Black Rider hunting hobbits', 'your Eye of Sauron']
+  var JOKE_ODDS = 0.5
+  var loopList = function () {
+    if (Math.random() >= JOKE_ODDS) return PAIRS
+    var at = 5 + Math.floor(Math.random() * (PAIRS.length - 5))
+    return PAIRS.slice(0, at).concat([JOKE], PAIRS.slice(at))
+  }
+  var LIST = loopList()
   var who = $('.who-doubt:not(.who-then)')
   if (who && M) {
     var slots = $$('.slot-loop', who)
@@ -220,7 +229,11 @@
     /* TextLoop (popLayout): the old phrase leaves upwards out of the layout while the new one rises in */
     var LOOP = { duration: 0.45, ease: [0.65, 0, 0.35, 1] }
     var show = function (i) {
-      idx = (i + PAIRS.length) % PAIRS.length
+      if (i >= LIST.length || i < 0) {   // a new loop decides afresh whether the joke comes
+        LIST = loopList()
+        i = i < 0 ? LIST.length - 1 : 0
+      }
+      idx = i
       slots.forEach(function (s, k) {
         var old = s.querySelector('.sl-item:not(.leaving)')
         if (old) {
@@ -232,7 +245,7 @@
         }
         var item = document.createElement('span')
         item.className = 'sl-item'
-        item.textContent = PAIRS[idx][k]
+        item.textContent = LIST[idx][k]
         s.appendChild(item)
         M.animate(item, { y: [20, 0], opacity: [0, 1] }, LOOP)
       })
