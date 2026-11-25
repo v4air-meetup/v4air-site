@@ -5,7 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: '0 4 * * *'  # daily, so new applicants get their share images (scripts/share-images)
+    - cron: '0 4 * * *'  # daily, so applicants who agreed to share get their share images (scripts/share-images)
 
 permissions:
   contents: read
